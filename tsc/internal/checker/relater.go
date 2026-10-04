@@ -176,6 +176,9 @@ func (c *Checker) isTypeRelatedTo(source *Type, target *Type, relation *Relation
 	if source == target {
 		return true
 	}
+	if isSsc, related := c.ssc_Related(source, target, relation); isSsc { // syscript
+		return related
+	}
 	if relation != c.identityRelation {
 		if relation == c.comparableRelation && target.flags&TypeFlagsNever == 0 && c.isSimpleTypeRelatedTo(target, source, relation, nil) || c.isSimpleTypeRelatedTo(source, target, relation, nil) {
 			return true
@@ -2654,6 +2657,9 @@ func (r *Relater) isRelatedToEx(originalSource *Type, originalTarget *Type, recu
 	target := r.c.getNormalizedType(originalTarget, true /*writing*/)
 	if source == target {
 		return TernaryTrue
+	}
+	if isSsc, result := r.ssc_RelatedOrReportError(originalSource, originalTarget, source, target, reportErrors, headMessage); isSsc { // syscript
+		return result
 	}
 	if r.relation == r.c.identityRelation {
 		if source.flags != target.flags {
