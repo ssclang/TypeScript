@@ -909,6 +909,9 @@ type Checker struct {
 
 	mu     sync.Mutex
 	tracer *Tracer // Optional tracer for trace events and type recording (for --generateTrace)
+
+	ssc_PreludeSymbolSet    map[*ast.Symbol]bool   // syscript
+	ssc_PreludeSymbolByName map[string]*ast.Symbol // syscript
 }
 
 func NewChecker(program Program, tracer *Tracer) (*Checker, *sync.Mutex) {
@@ -11114,6 +11117,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
 		if c.maybeTypeOfKindConsideringBaseConstraint(operandType, TypeFlagsESSymbolLike) {
 			c.error(expr.Operand, diagnostics.The_0_operator_cannot_be_applied_to_type_symbol, scanner.TokenToString(expr.Operator))
 		}
+		if ssc_type := c.ssc_UnaryResultTypeOrReportError(operandType, expr.Operator, expr.Operand); ssc_type != nil { // syscript
+			return ssc_type
+		}
 		if expr.Operator == ast.KindPlusToken {
 			if c.maybeTypeOfKindConsideringBaseConstraint(operandType, TypeFlagsBigIntLike) {
 				c.error(expr.Operand, diagnostics.Operator_0_cannot_be_applied_to_type_1, scanner.TokenToString(expr.Operator), c.TypeToString(c.getBaseTypeOfLiteralType(operandType)))
@@ -11138,6 +11144,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
 			// run check only if former checks succeeded to avoid reporting cascading errors
 			c.checkReferenceExpression(expr.Operand, diagnostics.The_operand_of_an_increment_or_decrement_operator_must_be_a_variable_or_a_property_access, diagnostics.The_operand_of_an_increment_or_decrement_operator_may_not_be_an_optional_property_access)
 		}
+		if ssc_type := c.ssc_UnaryResultTypeOrReportError(operandType, expr.Operator, expr.Operand); ssc_type != nil { // syscript
+			return ssc_type
+		}
 		return c.getUnaryResultType(operandType)
 	}
 	return c.errorType
@@ -11153,6 +11162,9 @@ func (c *Checker) checkPostfixUnaryExpression(node *ast.Node) *Type {
 	if ok {
 		// run check only if former checks succeeded to avoid reporting cascading errors
 		c.checkReferenceExpression(expr.Operand, diagnostics.The_operand_of_an_increment_or_decrement_operator_must_be_a_variable_or_a_property_access, diagnostics.The_operand_of_an_increment_or_decrement_operator_may_not_be_an_optional_property_access)
+	}
+	if ssc_type := c.ssc_UnaryResultTypeOrReportError(operandType, expr.Operator, expr.Operand); ssc_type != nil { // syscript
+		return ssc_type
 	}
 	return c.getUnaryResultType(operandType)
 }
@@ -12623,6 +12635,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
 		// If both are any or unknown, allow operation; assume it will resolve to number
 		if c.isTypeAssignableToKind(leftType, TypeFlagsAnyOrUnknown) && c.isTypeAssignableToKind(rightType, TypeFlagsAnyOrUnknown) || !c.maybeTypeOfKind(leftType, TypeFlagsBigIntLike) && !c.maybeTypeOfKind(rightType, TypeFlagsBigIntLike) {
 			resultType = c.numberType
+			if ssc_type := c.ssc_BinaryResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
+				resultType = ssc_type
+			}
 		} else if c.bothAreBigIntLike(leftType, rightType) {
 			switch operator {
 			case ast.KindGreaterThanGreaterThanGreaterThanToken, ast.KindGreaterThanGreaterThanGreaterThanEqualsToken:
@@ -12664,6 +12679,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
 			// Operands of an enum type are treated as having the primitive type Number.
 			// If both operands are of the Number primitive type, the result is of the Number primitive type.
 			resultType = c.numberType
+			if ssc_type := c.ssc_BinaryResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
+				resultType = ssc_type
+			}
 		} else if c.isTypeAssignableToKindEx(leftType, TypeFlagsBigIntLike, true /*strict*/) && c.isTypeAssignableToKindEx(rightType, TypeFlagsBigIntLike, true /*strict*/) {
 			// If both operands are of the BigInt primitive type, the result is of the BigInt primitive type.
 			resultType = c.bigintType
@@ -12677,6 +12695,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
 				resultType = c.errorType
 			} else {
 				resultType = c.anyType
+				if result := c.ssc_BinaryResultTypeOrReportError(leftType, rightType, operator, errorNode); result != nil { // syscript
+					resultType = result
+				}
 			}
 		}
 		// Symbols are not allowed at all in arithmetic expressions
@@ -12699,6 +12720,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
 		}
 		return resultType
 	case ast.KindLessThanToken, ast.KindGreaterThanToken, ast.KindLessThanEqualsToken, ast.KindGreaterThanEqualsToken:
+		if c.ssc_BinaryResultTypeOrReportError(leftType, rightType, operator, errorNode) != nil { // syscript
+			return c.booleanType
+		}
 		if c.checkForDisallowedESSymbolOperand(left, right, leftType, rightType, operator) {
 			leftType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(leftType, left))
 			rightType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(rightType, right))
@@ -13042,6 +13066,9 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
 }
 
 func (c *Checker) checkArithmeticOperandType(operand *ast.Node, t *Type, diagnostic *diagnostics.Message, isAwaitValid bool) bool {
+	if isSsc, _ := c.ssc_CommonType(t); isSsc { // syscript
+		return true
+	}
 	if !c.isTypeAssignableTo(t, c.numberOrBigIntType) {
 		var awaitedType *Type
 		if isAwaitValid {
@@ -26060,6 +26087,9 @@ func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t *Type, contextual
 
 func (c *Checker) isLiteralOfContextualType(candidateType *Type, contextualType *Type) bool {
 	if contextualType != nil {
+		if contextualType.flags&TypeFlagsNumber == 0 && c.ssc_symbol(contextualType) != nil { // syscript
+			return c.maybeTypeOfKind(candidateType, TypeFlagsNumberLiteral)
+		}
 		if contextualType.flags&TypeFlagsUnionOrIntersection != 0 {
 			return core.Some(contextualType.Types(), func(t *Type) bool {
 				return c.isLiteralOfContextualType(candidateType, t)
@@ -28184,6 +28214,11 @@ func (c *Checker) isTypeAssignableToKind(source *Type, kind TypeFlags) bool {
 func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict bool) bool {
 	if source.flags&kind != 0 {
 		return true
+	}
+	if kind&TypeFlagsNumberLike != 0 { // syscript
+		if isSsc, _ := c.ssc_CommonType(source); isSsc {
+			return true
+		}
 	}
 	if strict && source.flags&(TypeFlagsAnyOrUnknown|TypeFlagsVoid|TypeFlagsUndefined|TypeFlagsNull) != 0 {
 		return false

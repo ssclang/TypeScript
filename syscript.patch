@@ -1,0 +1,692 @@
+diff --git a/tsc/internal/checker/checker.go b/tsc/internal/checker/checker.go
+index 345ea00ce1..bf70d717dd 100644
+--- a/tsc/internal/checker/checker.go
++++ b/tsc/internal/checker/checker.go
+@@ -909,6 +909,9 @@ type Checker struct {
+ 
+ 	mu     sync.Mutex
+ 	tracer *Tracer // Optional tracer for trace events and type recording (for --generateTrace)
++
++	ssc_PreludeSymbolSet    map[*ast.Symbol]bool   // syscript
++	ssc_PreludeSymbolByName map[string]*ast.Symbol // syscript
+ }
+ 
+ func NewChecker(program Program, tracer *Tracer) (*Checker, *sync.Mutex) {
+@@ -11114,6 +11117,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
+ 		if c.maybeTypeOfKindConsideringBaseConstraint(operandType, TypeFlagsESSymbolLike) {
+ 			c.error(expr.Operand, diagnostics.The_0_operator_cannot_be_applied_to_type_symbol, scanner.TokenToString(expr.Operator))
+ 		}
++		if ssc_type := c.ssc_UnaryResultTypeOrReportError(operandType, expr.Operator, expr.Operand); ssc_type != nil { // syscript
++			return ssc_type
++		}
+ 		if expr.Operator == ast.KindPlusToken {
+ 			if c.maybeTypeOfKindConsideringBaseConstraint(operandType, TypeFlagsBigIntLike) {
+ 				c.error(expr.Operand, diagnostics.Operator_0_cannot_be_applied_to_type_1, scanner.TokenToString(expr.Operator), c.TypeToString(c.getBaseTypeOfLiteralType(operandType)))
+@@ -11138,6 +11144,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
+ 			// run check only if former checks succeeded to avoid reporting cascading errors
+ 			c.checkReferenceExpression(expr.Operand, diagnostics.The_operand_of_an_increment_or_decrement_operator_must_be_a_variable_or_a_property_access, diagnostics.The_operand_of_an_increment_or_decrement_operator_may_not_be_an_optional_property_access)
+ 		}
++		if ssc_type := c.ssc_UnaryResultTypeOrReportError(operandType, expr.Operator, expr.Operand); ssc_type != nil { // syscript
++			return ssc_type
++		}
+ 		return c.getUnaryResultType(operandType)
+ 	}
+ 	return c.errorType
+@@ -11154,6 +11163,9 @@ func (c *Checker) checkPostfixUnaryExpression(node *ast.Node) *Type {
+ 		// run check only if former checks succeeded to avoid reporting cascading errors
+ 		c.checkReferenceExpression(expr.Operand, diagnostics.The_operand_of_an_increment_or_decrement_operator_must_be_a_variable_or_a_property_access, diagnostics.The_operand_of_an_increment_or_decrement_operator_may_not_be_an_optional_property_access)
+ 	}
++	if ssc_type := c.ssc_UnaryResultTypeOrReportError(operandType, expr.Operator, expr.Operand); ssc_type != nil { // syscript
++		return ssc_type
++	}
+ 	return c.getUnaryResultType(operandType)
+ }
+ 
+@@ -12623,6 +12635,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+ 		// If both are any or unknown, allow operation; assume it will resolve to number
+ 		if c.isTypeAssignableToKind(leftType, TypeFlagsAnyOrUnknown) && c.isTypeAssignableToKind(rightType, TypeFlagsAnyOrUnknown) || !c.maybeTypeOfKind(leftType, TypeFlagsBigIntLike) && !c.maybeTypeOfKind(rightType, TypeFlagsBigIntLike) {
+ 			resultType = c.numberType
++			if ssc_type := c.ssc_BinaryResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
++				resultType = ssc_type
++			}
+ 		} else if c.bothAreBigIntLike(leftType, rightType) {
+ 			switch operator {
+ 			case ast.KindGreaterThanGreaterThanGreaterThanToken, ast.KindGreaterThanGreaterThanGreaterThanEqualsToken:
+@@ -12664,6 +12679,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+ 			// Operands of an enum type are treated as having the primitive type Number.
+ 			// If both operands are of the Number primitive type, the result is of the Number primitive type.
+ 			resultType = c.numberType
++			if ssc_type := c.ssc_BinaryResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
++				resultType = ssc_type
++			}
+ 		} else if c.isTypeAssignableToKindEx(leftType, TypeFlagsBigIntLike, true /*strict*/) && c.isTypeAssignableToKindEx(rightType, TypeFlagsBigIntLike, true /*strict*/) {
+ 			// If both operands are of the BigInt primitive type, the result is of the BigInt primitive type.
+ 			resultType = c.bigintType
+@@ -12677,6 +12695,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+ 				resultType = c.errorType
+ 			} else {
+ 				resultType = c.anyType
++				if result := c.ssc_BinaryResultTypeOrReportError(leftType, rightType, operator, errorNode); result != nil { // syscript
++					resultType = result
++				}
+ 			}
+ 		}
+ 		// Symbols are not allowed at all in arithmetic expressions
+@@ -12699,6 +12720,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+ 		}
+ 		return resultType
+ 	case ast.KindLessThanToken, ast.KindGreaterThanToken, ast.KindLessThanEqualsToken, ast.KindGreaterThanEqualsToken:
++		if c.ssc_BinaryResultTypeOrReportError(leftType, rightType, operator, errorNode) != nil { // syscript
++			return c.booleanType
++		}
+ 		if c.checkForDisallowedESSymbolOperand(left, right, leftType, rightType, operator) {
+ 			leftType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(leftType, left))
+ 			rightType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(rightType, right))
+@@ -13042,6 +13066,9 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
+ }
+ 
+ func (c *Checker) checkArithmeticOperandType(operand *ast.Node, t *Type, diagnostic *diagnostics.Message, isAwaitValid bool) bool {
++	if isSsc, _ := c.ssc_CommonType(t); isSsc { // syscript
++		return true
++	}
+ 	if !c.isTypeAssignableTo(t, c.numberOrBigIntType) {
+ 		var awaitedType *Type
+ 		if isAwaitValid {
+@@ -26060,6 +26087,9 @@ func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t *Type, contextual
+ 
+ func (c *Checker) isLiteralOfContextualType(candidateType *Type, contextualType *Type) bool {
+ 	if contextualType != nil {
++		if contextualType.flags&TypeFlagsNumber == 0 && c.ssc_symbol(contextualType) != nil { // syscript
++			return c.maybeTypeOfKind(candidateType, TypeFlagsNumberLiteral)
++		}
+ 		if contextualType.flags&TypeFlagsUnionOrIntersection != 0 {
+ 			return core.Some(contextualType.Types(), func(t *Type) bool {
+ 				return c.isLiteralOfContextualType(candidateType, t)
+@@ -28185,6 +28215,11 @@ func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict
+ 	if source.flags&kind != 0 {
+ 		return true
+ 	}
++	if kind&TypeFlagsNumberLike != 0 { // syscript
++		if isSsc, _ := c.ssc_CommonType(source); isSsc {
++			return true
++		}
++	}
+ 	if strict && source.flags&(TypeFlagsAnyOrUnknown|TypeFlagsVoid|TypeFlagsUndefined|TypeFlagsNull) != 0 {
+ 		return false
+ 	}
+diff --git a/tsc/internal/checker/relater.go b/tsc/internal/checker/relater.go
+index a9bc484fef..9c3b67d58d 100644
+--- a/tsc/internal/checker/relater.go
++++ b/tsc/internal/checker/relater.go
+@@ -176,6 +176,9 @@ func (c *Checker) isTypeRelatedTo(source *Type, target *Type, relation *Relation
+ 	if source == target {
+ 		return true
+ 	}
++	if isSsc, related := c.ssc_Related(source, target, relation); isSsc { // syscript
++		return related
++	}
+ 	if relation != c.identityRelation {
+ 		if relation == c.comparableRelation && target.flags&TypeFlagsNever == 0 && c.isSimpleTypeRelatedTo(target, source, relation, nil) || c.isSimpleTypeRelatedTo(source, target, relation, nil) {
+ 			return true
+@@ -2655,6 +2658,9 @@ func (r *Relater) isRelatedToEx(originalSource *Type, originalTarget *Type, recu
+ 	if source == target {
+ 		return TernaryTrue
+ 	}
++	if isSsc, result := r.ssc_RelatedOrReportError(originalSource, originalTarget, source, target, reportErrors, headMessage); isSsc { // syscript
++		return result
++	}
+ 	if r.relation == r.c.identityRelation {
+ 		if source.flags != target.flags {
+ 			return TernaryFalse
+diff --git a/tsc/internal/checker/ssc.go b/tsc/internal/checker/ssc.go
+new file mode 100644
+index 0000000000..c927ddb09e
+--- /dev/null
++++ b/tsc/internal/checker/ssc.go
+@@ -0,0 +1,205 @@
++package checker
++
++import (
++	"slices"
++
++	"github.com/microsoft/TypeScript/tsc/internal/ast"
++	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
++	"github.com/microsoft/TypeScript/tsc/internal/scanner"
++)
++
++var ssc_sortedTypes = []string{"i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64"}
++
++var ssc_floatTypes = []string{"f32", "f64"}
++
++var ssc_bitwiseOperators = []ast.Kind{
++	ast.KindAmpersandEqualsToken,
++	ast.KindAmpersandToken,
++	ast.KindBarEqualsToken,
++	ast.KindBarToken,
++	ast.KindCaretEqualsToken,
++	ast.KindCaretToken,
++	ast.KindGreaterThanGreaterThanEqualsToken,
++	ast.KindGreaterThanGreaterThanGreaterThanEqualsToken,
++	ast.KindGreaterThanGreaterThanGreaterThanToken,
++	ast.KindGreaterThanGreaterThanToken,
++	ast.KindLessThanLessThanEqualsToken,
++	ast.KindLessThanLessThanToken,
++	ast.KindTildeToken,
++}
++
++var ssc_losslessTargets = map[string][]string{
++	"i8":  {"i8", "i16", "i32", "i64", "f32", "f64"},
++	"i16": {"i16", "i32", "i64", "f32", "f64"},
++	"i32": {"i32", "i64", "f64"},
++	"i64": {"i64"},
++	"u8":  {"u8", "u16", "u32", "u64", "i16", "i32", "i64", "f32", "f64"},
++	"u16": {"u16", "u32", "u64", "i32", "i64", "f32", "f64"},
++	"u32": {"u32", "u64", "i64", "f64"},
++	"u64": {"u64"},
++	"f32": {"f32", "f64"},
++	"f64": {"f64"},
++}
++
++func (c *Checker) ssc_loadPrelude() (symbolSet map[*ast.Symbol]bool, symbolByName map[string]*ast.Symbol) {
++	if c.ssc_PreludeSymbolSet != nil {
++		return c.ssc_PreludeSymbolSet, c.ssc_PreludeSymbolByName
++	}
++	symbolSet = map[*ast.Symbol]bool{}
++	symbolByName = map[string]*ast.Symbol{}
++	for name := range slices.Values(ssc_sortedTypes) {
++		symbol := c.getGlobalSymbol(name, ast.SymbolFlagsTypeAlias, nil)
++		if symbol == nil {
++			continue
++		}
++		declaration := ast.GetDeclarationOfKind(symbol, ast.KindTypeAliasDeclaration)
++		if declaration == nil {
++			continue
++		}
++		sourceFile := ast.GetSourceFileOfNode(declaration)
++		if sourceFile == nil || sourceFile.FileName().BaseName() != "prelude.d.ts" {
++			continue
++		}
++		packageJsonDirectory := c.program.GetSourceFileMetaData(sourceFile.PathKey()).PackageJsonDirectory
++		if packageJsonDirectory == "" {
++			continue
++		}
++		packageJson := c.program.GetPackageJsonInfo(packageJsonDirectory.ResolveFile("package.json")).GetContents()
++		if packageJson == nil {
++			continue
++		}
++		if packageName, ok := packageJson.Name.GetValue(); ok && packageName == "syscript" {
++			symbolSet[symbol] = true
++			symbolByName[name] = symbol
++		}
++	}
++	c.ssc_PreludeSymbolSet = symbolSet
++	c.ssc_PreludeSymbolByName = symbolByName
++	return symbolSet, symbolByName
++}
++
++func (c *Checker) ssc_symbol(t *Type) *ast.Symbol {
++	symbolSet, symbolByName := c.ssc_loadPrelude() // loaded on the first lookup instead of in NewChecker, to keep code injected into checker.go minimal
++	if t.flags&TypeFlagsNumber != 0 {
++		return symbolByName["f64"]
++	}
++	if symbol := t.alias.Symbol(); symbolSet[symbol] {
++		return symbol
++	}
++	return nil
++}
++
++func (c *Checker) ssc_CommonType(types ...*Type) (isSsc bool, commonType *Type) {
++	var symbols []*ast.Symbol
++	for t := range slices.Values(types) {
++		memberTypes := []*Type{t}
++		if t.flags&TypeFlagsUnion != 0 {
++			memberTypes = t.Types()
++		}
++		for memberType := range slices.Values(memberTypes) {
++			if memberType.flags&TypeFlagsNumberLiteral != 0 {
++				continue
++			}
++			symbol := c.ssc_symbol(memberType)
++			if symbol == nil {
++				return false, nil
++			}
++			symbols = append(symbols, symbol)
++		}
++	}
++	if len(symbols) == 0 {
++		return false, nil
++	}
++	for name := range slices.Values(ssc_sortedTypes) {
++		if slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return !slices.Contains(ssc_losslessTargets[symbol.Name()], name) }) {
++			continue
++		}
++		_, symbolByName := c.ssc_loadPrelude()
++		symbol := symbolByName[name]
++		if symbol == nil {
++			return true, nil
++		}
++		return true, c.getDeclaredTypeOfSymbol(symbol)
++	}
++	return true, nil
++}
++
++func (c *Checker) ssc_UnaryResultTypeOrReportError(operandType *Type, operator ast.Kind, errorNode *ast.Node) *Type {
++	isSsc, result := c.ssc_CommonType(operandType)
++	if !isSsc {
++		return nil
++	}
++	if operator == ast.KindPlusToken {
++		result = nil
++		_, symbolByName := c.ssc_loadPrelude()
++		if f64Symbol := symbolByName["f64"]; f64Symbol != nil {
++			_, result = c.ssc_CommonType(operandType, c.getDeclaredTypeOfSymbol(f64Symbol))
++		}
++	}
++	if result != nil && slices.Contains(ssc_floatTypes, c.ssc_symbol(result).Name()) && slices.Contains(ssc_bitwiseOperators, operator) {
++		result = nil
++	}
++	if result == nil {
++		c.error(errorNode, diagnostics.Operator_0_cannot_be_applied_to_type_1, scanner.TokenToString(operator), c.TypeToString(operandType))
++		return c.errorType
++	}
++	return result
++}
++
++func (c *Checker) ssc_BinaryResultType(left *Type, right *Type) (isSsc bool, result *Type) {
++	leftIsSsc, _ := c.ssc_CommonType(left)
++	rightIsSsc, _ := c.ssc_CommonType(right)
++	if !leftIsSsc && !rightIsSsc {
++		return false, nil
++	}
++	_, result = c.ssc_CommonType(left, right)
++	return true, result
++}
++
++func (c *Checker) ssc_BinaryResultTypeOrReportError(left *Type, right *Type, operator ast.Kind, errorNode *ast.Node) *Type {
++	isSsc, result := c.ssc_BinaryResultType(left, right)
++	if !isSsc {
++		return nil
++	}
++	if result != nil && slices.Contains(ssc_floatTypes, c.ssc_symbol(result).Name()) && slices.Contains(ssc_bitwiseOperators, operator) {
++		result = nil
++	}
++	if result == nil {
++		c.reportOperatorError(left, operator, right, errorNode, nil)
++		return c.errorType
++	}
++	return result
++}
++
++func (c *Checker) ssc_Related(source *Type, target *Type, relation *Relation) (isSsc bool, related bool) {
++	sourceSymbol := c.ssc_symbol(source)
++	targetSymbol := c.ssc_symbol(target)
++	if sourceSymbol == nil || targetSymbol == nil {
++		return false, false
++	}
++	if relation == c.identityRelation || relation == c.subtypeRelation || relation == c.strictSubtypeRelation {
++		return true, sourceSymbol == targetSymbol
++	}
++	if relation == c.comparableRelation {
++		_, commonType := c.ssc_CommonType(source, target)
++		return true, commonType != nil
++	}
++	if relation == c.assignableRelation {
++		return true, slices.Contains(ssc_losslessTargets[sourceSymbol.Name()], targetSymbol.Name())
++	}
++	return false, false
++}
++
++func (r *Relater) ssc_RelatedOrReportError(originalSource *Type, originalTarget *Type, source *Type, target *Type, reportErrors bool, headMessage *diagnostics.Message) (isSsc bool, result Ternary) {
++	isSsc, related := r.c.ssc_Related(source, target, r.relation)
++	if !isSsc {
++		return false, TernaryFalse
++	}
++	if !related {
++		if reportErrors {
++			r.reportErrorResults(originalSource, originalTarget, source, target, headMessage)
++		}
++		return true, TernaryFalse
++	}
++	return true, TernaryTrue
++}
+diff --git a/tsc/internal/checker/ssc_test.go b/tsc/internal/checker/ssc_test.go
+new file mode 100644
+index 0000000000..7885f4e09f
+--- /dev/null
++++ b/tsc/internal/checker/ssc_test.go
+@@ -0,0 +1,335 @@
++package checker_test
++
++import (
++	"encoding/json"
++	"slices"
++	"testing"
++
++	"github.com/microsoft/TypeScript/tsc/internal/ast"
++	"github.com/microsoft/TypeScript/tsc/internal/bundled"
++	"github.com/microsoft/TypeScript/tsc/internal/compiler"
++	"github.com/microsoft/TypeScript/tsc/internal/core"
++	"github.com/microsoft/TypeScript/tsc/internal/tsoptions"
++	"github.com/microsoft/TypeScript/tsc/internal/tspath"
++	"github.com/microsoft/TypeScript/tsc/internal/vfs/vfstest"
++	"gotest.tools/v3/assert"
++)
++
++const ssc_prelude = `export {};
++declare global {
++  type i8 = number & {};
++  type i16 = number & {};
++  type i32 = number & {};
++  type i64 = number & {};
++  type u8 = number & {};
++  type u16 = number & {};
++  type u32 = number & {};
++  type u64 = number & {};
++  type f32 = number & {};
++  type f64 = number & {};
++  interface Array<T> { length: u64; [n: number]: T; [n: i64]: T; [n: u64]: T }
++  interface Boolean {}
++  interface CallableFunction {}
++  interface Function {}
++  interface IArguments {}
++  interface NewableFunction {}
++  interface Number {}
++  interface Object {}
++  interface RegExp {}
++  interface String {}
++}
++`
++
++const ssc_declarations = `declare const c: boolean;
++declare const n: number;
++declare const x: any;
++declare const lit: 1 | 2;
++declare const items: string[];
++declare function abs(v: number): number;
++enum E { A, B }
++declare const e: E;
++declare let a8: i8;
++declare let a16: i16;
++declare let a32: i32;
++declare let b32: i32;
++declare let a64: i64;
++declare let ua8: u8;
++declare let ua32: u32;
++declare let ua64: u64;
++declare let fa32: f32;
++declare let fa64: f64;
++`
++
++type ssc_result struct {
++	resultType string
++	codes      []int32
++}
++
++func ssc_check(t *testing.T, files map[string]string, rootFiles []string) ssc_result {
++	t.Helper()
++	config, err := json.Marshal(map[string]any{
++		"compilerOptions": map[string]any{"strict": true, "noEmit": true, "noLib": true},
++		"files":           rootFiles,
++	})
++	assert.NilError(t, err)
++	files["/tsconfig.json"] = string(config)
++	fs := bundled.WrapFS(vfstest.FromMap(files, tspath.CaseSensitive))
++	host := compiler.NewCompilerHost(fs, bundled.LibPath(), nil, nil, nil)
++	parsed, errors := tsoptions.GetParsedCommandLineOfConfigFile("/tsconfig.json", &core.CompilerOptions{}, nil, fs, nil)
++	assert.Equal(t, len(errors), 0, "Expected no errors in parsed command line")
++	p := compiler.NewProgram(compiler.ProgramOptions{Config: parsed, Host: host})
++	p.BindSourceFiles()
++	file := p.GetSourceFile("/main.ts")
++	var result ssc_result
++	for sourceFile := range slices.Values(p.GetSourceFiles()) {
++		for diagnostic := range slices.Values(p.GetSemanticDiagnostics(t.Context(), sourceFile)) {
++			result.codes = append(result.codes, diagnostic.Code())
++		}
++	}
++	c, done := p.GetTypeChecker(t.Context())
++	defer done()
++	for statement := range slices.Values(file.Statements.Nodes) {
++		if statement.Kind != ast.KindVariableStatement {
++			continue
++		}
++		for declaration := range slices.Values(statement.AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes) {
++			if declaration.Name().Text() == "r" {
++				result.resultType = c.TypeToString(c.GetTypeAtLocation(declaration.Name()))
++			}
++		}
++	}
++	return result
++}
++
++func ssc_checkSource(t *testing.T, source string) ssc_result {
++	t.Helper()
++	return ssc_check(t, map[string]string{
++		"/node_modules/syscript/package.json": `{ "name": "syscript", "version": "0.0.0" }`,
++		"/node_modules/syscript/prelude.d.ts": ssc_prelude,
++		"/main.ts":                            ssc_declarations + source + "\nexport {};\n",
++	}, []string{"node_modules/syscript/prelude.d.ts", "main.ts"})
++}
++
++func TestSscOperators(t *testing.T) {
++	t.Parallel()
++	cases := []struct {
++		name       string
++		source     string
++		resultType string
++		codes      []int32
++	}{
++		{"same type", "const r = a32 + b32;", "i32", nil},
++		{"literal right", "const r = a32 + 1;", "i32", nil},
++		{"literal left", "const r = 1 + a32;", "i32", nil},
++		{"literal union", "const r = a32 + lit;", "i32", nil},
++		{"numeric enum", "const r = a32 * e;", "i32", nil},
++		{"widen", "const r = a32 + a64;", "i64", nil},
++		{"widen to third type", "const r = ua32 + a32;", "i64", nil},
++		{"widen to f64", "const r = a32 * fa32;", "f64", nil},
++		{"widen to f32", "const r = a16 * fa32;", "f32", nil},
++		{"bitwise", "const r = a32 & b32;", "i32", nil},
++		{"no common type", "const r = a64 + ua64;", "any", []int32{2365}},
++		{"number as f64", "const r = a32 + n;", "f64", nil},
++		{"number as f64 without common type", "const r = a64 + n;", "any", []int32{2365}},
++		{"number only", "const r = n + n;", "f64", nil},
++		{"literals only", "const r = 1 + 2;", "number", nil},
++		{"string concatenation", `const r = a32 + "s";`, "string", nil},
++		{"union operand", "const r = (c ? a32 : a64) + b32;", "i64", nil},
++		{"union operands as a whole", "const r = (c ? ua32 : a8) + fa32;", "f64", nil},
++		{"union without common type", "const r = (c ? a64 : ua64) + 1;", "any", []int32{2365}},
++		{"unary", "const r = -a32;", "i32", nil},
++		{"unary bitwise", "const r = ~a32;", "i32", nil},
++		{"unary plus", "const r = +a32;", "f64", nil},
++		{"unary plus on f32", "const r = +fa32;", "f64", nil},
++		{"unary plus on u32 union", "const r = +(c ? ua32 : a32);", "f64", nil},
++		{"unary plus lossy", "const r = +a64;", "any", []int32{2736}},
++		{"unary plus on number", "const r = +n;", "f64", nil},
++		{"unary union", "const r = -(c ? a32 : a64);", "i64", nil},
++		{"unary union without common type", "const r = -(c ? a64 : ua64);", "any", []int32{2736}},
++		{"increment union without common type", "let v = c ? a64 : ua64;\nconst r = v++;", "any", []int32{2736}},
++		{"prefix increment", "const r = ++a64;", "i64", nil},
++		{"postfix increment", "const r = a32++;", "i32", nil},
++		{"compound assignment", "a32 += 1;", "", nil},
++		{"compound assignment narrowing", "a32 += a64;", "", []int32{2322}},
++		{"relational", "const r = a32 < a64;", "boolean", nil},
++		{"relational literal", "const r = a64 <= 1;", "boolean", nil},
++		{"relational no common type", "const r = a64 < ua64;", "boolean", []int32{2365}},
++		{"relational number", "const r = a32 < n;", "boolean", nil},
++		{"relational number without common type", "const r = a64 < n;", "boolean", []int32{2365}},
++		{"plus any", "const r = a32 + x;", "any", []int32{2365}},
++		{"minus any", "const r = a32 - x;", "any", []int32{2365}},
++		{"plus any with number", "const r = n + x;", "any", []int32{2365}},
++		{"number with literal", "const r = n + 1;", "f64", nil},
++		{"number with ssc", "const r = n - a32;", "f64", nil},
++		{"unary minus on number", "const r = -n;", "f64", nil},
++		{"f64 string concatenation", `const r = fa64 + "s";`, "string", nil},
++		{"number string concatenation", `const r = n + "s";`, "string", nil},
++		{"template literal", "const r = `${a64}`;", "string", nil},
++		{"bigint operand", "const r = a32 + 1n;", "any", []int32{2365}},
++		{"boolean operand", "const r = a32 + c;", "any", []int32{2365}},
++		{"division", "const r = a32 / b32;", "i32", nil},
++		{"remainder", "const r = a32 % b32;", "i32", nil},
++		{"exponent", "const r = a32 ** 2;", "i32", nil},
++		{"shift", "const r = a32 << 2;", "i32", nil},
++		{"shift widening", "const r = a64 >> a32;", "i64", nil},
++		{"unsigned shift", "const r = ua32 >>> 1;", "u32", nil},
++		{"bitwise widening", "const r = a32 | ua32;", "i64", nil},
++		{"bitwise to third type", "const r = a8 ^ ua8;", "i16", nil},
++		{"bitwise on float", "const r = fa32 & fa32;", "any", []int32{2365}},
++		{"bitwise widening to float", "const r = a32 | fa32;", "any", []int32{2365}},
++		{"bitwise on number", "const r = a32 | n;", "any", []int32{2365}},
++		{"bitwise number only", "const r = n | 0;", "any", []int32{2365}},
++		{"shift on float", "const r = fa64 << 1;", "any", []int32{2365}},
++		{"shift by float", "const r = a32 >> fa32;", "any", []int32{2365}},
++		{"unary bitwise on float", "const r = ~fa32;", "any", []int32{2736}},
++		{"unary bitwise on number", "const r = ~n;", "any", []int32{2736}},
++		{"compound bitwise on float", "let v: f64 = 0;\nv |= 1;", "", []int32{2365}},
++		{"compound bitwise on integer", "let v: u32 = 0;\nv |= 1;", "", nil},
++		{"array length", "const r = items.length - 1;", "u64", nil},
++		{"array length with signed", "const r = items.length + a32;", "any", []int32{2365}},
++		{"loose equality", "const r = a32 == a64;", "boolean", nil},
++		{"strict inequality without common type", "const r = a32 !== ua64;", "boolean", []int32{2367}},
++		{"relational number left", "const r = n > a32;", "boolean", nil},
++		{"relational to third type", "const r = ua32 >= a32;", "boolean", nil},
++		{"compound assignment widening", "let v: i64 = 0;\nv += a32;", "", nil},
++		{"compound multiply", "let v: i32 = 0;\nv *= 2;", "", nil},
++		{"compound assignment number to f64", "let v: f64 = 0;\nv += n;", "", nil},
++		{"compound assignment number to i32", "let v: i32 = 0;\nv += n;", "", []int32{2322}},
++		{"loop over length", "for (let i: u64 = 0; i < items.length; i++) { items[i]; }", "", nil},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Parallel()
++			result := ssc_checkSource(t, tc.source)
++			if tc.resultType != "" {
++				assert.Equal(t, result.resultType, tc.resultType)
++			}
++			assert.DeepEqual(t, result.codes, tc.codes)
++		})
++	}
++}
++
++func TestSscRelations(t *testing.T) {
++	t.Parallel()
++	cases := []struct {
++		name       string
++		source     string
++		resultType string
++		codes      []int32
++	}{
++		{"lossless assignment", "const r: i64 = a32;", "i64", nil},
++		{"lossless assignment across sign", "const r: i64 = ua32;", "i64", nil},
++		{"lossy assignment", "const r: i32 = a64;", "i32", []int32{2322}},
++		{"sign change", "const r: u32 = a32;", "u32", []int32{2322}},
++		{"conditional keeps union", "const r = c ? a32 : a64;", "i32 | i64", nil},
++		{"union assignment", "const r: i64 = c ? a32 : a64;", "i64", nil},
++		{"multiple returns keep union", "function f() { return c ? a32 : a64; }\nconst r = f();", "i32 | i64", nil},
++		{"generic inference", "declare function id<T>(v: T): T;\nconst r = id(a32 + a64);", "i64", nil},
++		{"generic without implicit widening", "declare function pair<T>(p: T, q: T): T;\nconst r = pair(a32, a64);", "", []int32{2345}},
++		{"equality with common type", "const r = ua32 === a32;", "boolean", nil},
++		{"equality without common type", "const r = a64 === ua64;", "boolean", []int32{2367}},
++		{"assertion with common type", "const r = a32 as i64;", "i64", nil},
++		{"assertion without common type", "const r = ua64 as i64;", "i64", []int32{2352}},
++		{"redeclaration", "var v: i32;\nvar v: i64;", "", []int32{2403}},
++		{"number assignment", "const r: i32 = n;", "i32", []int32{2322}},
++		{"number assignment to f64", "const r: f64 = n;", "f64", nil},
++		{"number argument", "declare function take(v: i32): void;\ntake(n);", "", []int32{2345}},
++		{"number return", "function f(): i32 { return n; }", "", []int32{2322}},
++		{"union with number", "const r: i64 = c ? a32 : n;", "i64", []int32{2322}},
++		{"literal assignment", "const r: i32 = 1;", "i32", nil},
++		{"ssc to number", "const r: number = a32;", "number", nil},
++		{"lossy ssc to number", "const r: number = a64;", "number", []int32{2322}},
++		{"index with i64", "const r = items[a64];", "string", nil},
++		{"index with u64", "const r = items[ua64];", "string", nil},
++		{"index with i32", "const r = items[a32];", "string", nil},
++		{"index with number", "const r = items[n];", "string", nil},
++		{"length", "const r = items.length;", "u64", nil},
++		{"compare unsigned with length", "const r = ua32 < items.length;", "boolean", nil},
++		{"compare signed with length", "const r = a32 < items.length;", "boolean", []int32{2365}},
++		{"index with union", "const r = items[c ? a32 : ua64];", "string", nil},
++		{"object index with i64 signature", "declare const rec: { [n: i64]: string };\nconst r = rec[a64];", "string", nil},
++		{"object index without i64 signature", "declare const rec: { [n: number]: string };\nconst r = rec[a64];", "any", []int32{7015}},
++		{"lossy ssc as number argument", "const r = abs(a64);", "number", []int32{2345}},
++		{"ssc as number argument", "const r = abs(a32);", "number", nil},
++		{"number as assertion", "const r = n as i32;", "i32", nil},
++		{"lossy assertion to number", "const r = a64 as number;", "number", []int32{2352}},
++		{"array element widening", "const r: i64[] = [a32];", "i64[]", nil},
++		{"lossy array element", "const r: i32[] = [a64];", "i32[]", []int32{2322}},
++		{"number array element", "const r: i32[] = [n];", "i32[]", []int32{2322}},
++		{"property widening", "const r: { v: i64 } = { v: a32 };", "", nil},
++		{"lossy property", "const r: { v: i32 } = { v: a64 };", "", []int32{2322}},
++		{"generic constraint", "declare function g<T extends i64>(v: T): T;\nconst r = g(a32);", "i32", nil},
++		{"generic constraint violation", "declare function g<T extends i64>(v: T): T;\nconst r = g(ua64);", "", []int32{2345}},
++		{"overload exact", "declare function o(v: i32): 'i32';\ndeclare function o(v: i64): 'i64';\nconst r = o(a64);", `"i64"`, nil},
++		{"overload first match", "declare function o(v: i32): 'i32';\ndeclare function o(v: i64): 'i64';\nconst r = o(a32);", `"i32"`, nil},
++		{"union target with string", "const r: i32 | string = a64;", "", []int32{2322}},
++		{"optional target", "const r: i64 | undefined = a32;", "", nil},
++		{"switch case comparability", "switch (a32) { case a64: break; case ua64: break; }", "", []int32{2678}},
++		{"tuple element", "const t: [string, i32] = ['a', a32];\nconst r = t[1];", "i32", nil},
++		{"conditional with literal", "const r = c ? a32 : 1;", "1 | i32", nil},
++		{"mutable conditional with literal", "let r = c ? a32 : 1;", "number | i32", nil},
++		{"literals in array", "const r: i32[] = [1, 2];", "i32[]", nil},
++		{"literal in object", "const r: { v: i32 } = { v: 1 };", "", nil},
++		{"literals in tuple", "const r: [i32, i64] = [1, 2];", "[i32, i64]", nil},
++		{"literals in array argument", "declare function take(v: i32[]): void;\ntake([1, 2]);", "", nil},
++		{"typeof narrowing", "declare const ns: i32 | string;\nconst r = typeof ns === 'number' ? ns : a32;", "number | i32", nil},
++		{"const object", "const r = { a: 1, b: a32, c: a32 + a64, d: n } as const;", "{ readonly a: 1; readonly b: i32; readonly c: i64; readonly d: number; }", nil},
++		{"plain object", "const r = { a: 1, b: a32, c: a32 + a64, d: n };", "{ a: number; b: i32; c: i64; d: number; }", nil},
++		{"const tuple", "const r = [1, a32, a64] as const;", "readonly [1, i32, i64]", nil},
++		{"nested const object", "const r = { nested: { a: 1, b: ua8 } } as const;", "{ readonly nested: { readonly a: 1; readonly b: u8; }; }", nil},
++		{"never assignment", "declare const nv: never;\nconst r: i32 = nv;", "i32", nil},
++		{"any assignment is left to tsc", "const r: i32 = x;", "i32", nil},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Parallel()
++			result := ssc_checkSource(t, tc.source)
++			if tc.resultType != "" {
++				assert.Equal(t, result.resultType, tc.resultType)
++			}
++			assert.DeepEqual(t, result.codes, tc.codes)
++		})
++	}
++}
++
++func TestSscPreludeIdentification(t *testing.T) {
++	t.Parallel()
++	const localAliases = `type i32 = number & {};
++type u32 = number & {};
++declare const p: i32;
++declare const q: u32;
++const r = p + q;
++export {};
++`
++	t.Run("same name aliases without prelude", func(t *testing.T) {
++		t.Parallel()
++		result := ssc_check(t, map[string]string{
++			"/node_modules/other/package.json": `{ "name": "other", "version": "0.0.0" }`,
++			"/node_modules/other/prelude.d.ts": ssc_prelude,
++			"/main.ts":                         localAliases,
++		}, []string{"node_modules/other/prelude.d.ts", "main.ts"})
++		assert.Equal(t, result.resultType, "number")
++		assert.DeepEqual(t, result.codes, []int32(nil))
++	})
++	t.Run("prelude outside the syscript package", func(t *testing.T) {
++		t.Parallel()
++		result := ssc_check(t, map[string]string{
++			"/node_modules/other/package.json": `{ "name": "other", "version": "0.0.0" }`,
++			"/node_modules/other/prelude.d.ts": ssc_prelude,
++			"/main.ts":                         ssc_declarations + "const r = a64 + ua64;\nexport {};\n",
++		}, []string{"node_modules/other/prelude.d.ts", "main.ts"})
++		assert.Equal(t, result.resultType, "number")
++		assert.DeepEqual(t, result.codes, []int32(nil))
++	})
++	t.Run("value merged into a prelude type", func(t *testing.T) {
++		t.Parallel()
++		result := ssc_check(t, map[string]string{
++			"/user.d.ts":                          "declare function i32(): void;\n",
++			"/node_modules/syscript/package.json": `{ "name": "syscript", "version": "0.0.0" }`,
++			"/node_modules/syscript/prelude.d.ts": ssc_prelude,
++			"/main.ts":                            ssc_declarations + "const r = a32 + b32;\nexport {};\n",
++		}, []string{"user.d.ts", "node_modules/syscript/prelude.d.ts", "main.ts"})
++		assert.Equal(t, result.resultType, "i32")
++		assert.DeepEqual(t, result.codes, []int32(nil))
++	})
++}
