@@ -2695,6 +2695,9 @@ func (r *Relater) isRelatedToEx(originalSource *Type, originalTarget *Type, recu
 			if source == target {
 				return TernaryTrue
 			}
+			if isSsc, result := r.ssc_RelatedOrReportError(originalSource, originalTarget, source, target, reportErrors, headMessage); isSsc { // syscript
+				return result
+			}
 		}
 	}
 	if r.relation == r.c.comparableRelation && target.flags&TypeFlagsNever == 0 && r.c.isSimpleTypeRelatedTo(target, source, r.relation, nil) ||

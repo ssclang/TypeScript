@@ -3,6 +3,7 @@ package checker_test
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/TypeScript/tsc/internal/ast"
@@ -61,8 +62,9 @@ declare let fa64: f64;
 `
 
 type ssc_result struct {
-	resultType string
-	codes      []int32
+	resultType      string
+	codes           []int32
+	suggestionCodes []int32
 }
 
 func ssc_check(t *testing.T, files map[string]string, rootFiles []string) ssc_result {
@@ -85,6 +87,9 @@ func ssc_check(t *testing.T, files map[string]string, rootFiles []string) ssc_re
 		for diagnostic := range slices.Values(p.GetSemanticDiagnostics(t.Context(), sourceFile)) {
 			result.codes = append(result.codes, diagnostic.Code())
 		}
+	}
+	for diagnostic := range slices.Values(p.GetSuggestionDiagnostics(t.Context(), file)) {
+		result.suggestionCodes = append(result.suggestionCodes, diagnostic.Code())
 	}
 	c, done := p.GetTypeChecker(t.Context())
 	defer done()
@@ -122,6 +127,29 @@ func TestSscOperators(t *testing.T) {
 		{"literal right", "const r = a32 + 1;", "i32", nil},
 		{"literal left", "const r = 1 + a32;", "i32", nil},
 		{"literal union", "const r = a32 + lit;", "i32", nil},
+		{"literal beyond operand range", "const r = ua8 + 300;", "u16", nil},
+		{"literal union beyond operand range", "const r = ua8 + (c ? 1 : 300);", "u16", nil},
+		{"negative literal with unsigned", "const r = ua32 + -1;", "i64", nil},
+		{"large literal with unsigned", "const r = ua32 + 5000000000;", "u64", nil},
+		{"literal beyond signed operand range", "const r = a8 + 300;", "i16", nil},
+		{"mixed unions with literals", "const r = (c ? ua8 : a8) + (c ? 300 : -1);", "i16", nil},
+		{"unsigned unions with literals", "const r = (c ? ua8 : ua32) + (c ? 1 : 5000000000);", "u64", nil},
+		{"mixed unions with fractional literal", "const r = (c ? a32 : ua32) + (c ? 1 : 1.5);", "f64", nil},
+		{"mixed unions without common type", "const r = (c ? ua64 : a8) + (c ? 1 : 2);", "any", []int32{2365}},
+		{"signed union with unsigned literal beyond", "const r = (c ? a8 : a16) + (c ? 1 : 40000);", "i32", nil},
+		{"fractional literal", "const r = ua8 + 1.5;", "f32", nil},
+		{"fractional literal widening to f64", "const r = a32 + 1.5;", "f64", nil},
+		{"fractional literal without common type", "const r = ua64 + 1.5;", "any", []int32{2365}},
+		{"literal at i64 max", "const r = a64 + 9223372036854775807;", "i64", nil},
+		{"literal beyond i64 without common type", "const r = a64 + 9223372036854775808;", "any", []int32{2365}},
+		{"bitwise literal beyond operand range", "const r = ua8 & 0x1ff;", "u16", nil},
+		{"bitwise fractional literal", "const r = ua8 & 1.5;", "any", []int32{2365}},
+		{"relational literal beyond operand range", "const r = ua8 < 300;", "boolean", nil},
+		{"compound assignment literal beyond range", "let v: u8 = 0;\nv += 300;", "", []int32{2322}},
+		{"literal at u64 max with u64", "const r = ua64 + 18446744073709551615;", "u64", nil},
+		{"literal over u64 without common type", "const r = ua64 + 18446744073709551616;", "any", []int32{2365}},
+		{"compound assignment literal at u64 max", "let v: u64 = 0;\nv += 18446744073709551615;", "", nil},
+		{"equality with negative literal widens to signed", "const r = ua8 === -1;", "boolean", nil},
 		{"numeric enum", "const r = a32 * e;", "i32", nil},
 		{"widen", "const r = a32 + a64;", "i64", nil},
 		{"widen to third type", "const r = ua32 + a32;", "i64", nil},
@@ -146,6 +174,13 @@ func TestSscOperators(t *testing.T) {
 		{"unary plus on number", "const r = +n;", "f64", nil},
 		{"unary union", "const r = -(c ? a32 : a64);", "i64", nil},
 		{"unary union without common type", "const r = -(c ? a64 : ua64);", "any", []int32{2736}},
+		{"unary minus on f32", "const r = -fa32;", "f32", nil},
+		{"unary minus on u8 widens to signed", "const r = -ua8;", "i16", nil},
+		{"unary minus on u32 widens to signed", "const r = -ua32;", "i64", nil},
+		{"unary minus on u64 without signed type", "const r = -ua64;", "any", []int32{2736}},
+		{"unary minus on mixed union", "const r = -(c ? ua8 : a8);", "i16", nil},
+		{"unary bitwise on unsigned keeps type", "const r = ~ua8;", "u8", nil},
+		{"increment on unsigned keeps type", "const r = ua8++;", "u8", nil},
 		{"increment union without common type", "let v = c ? a64 : ua64;\nconst r = v++;", "any", []int32{2736}},
 		{"prefix increment", "const r = ++a64;", "i64", nil},
 		{"postfix increment", "const r = a32++;", "i32", nil},
@@ -230,6 +265,19 @@ func TestSscRelations(t *testing.T) {
 		{"equality without common type", "const r = a64 === ua64;", "boolean", []int32{2367}},
 		{"assertion with common type", "const r = a32 as i64;", "i64", nil},
 		{"assertion without common type", "const r = ua64 as i64;", "i64", []int32{2352}},
+		{"equality with literal beyond range", "const r = ua8 === 300;", "boolean", nil},
+		{"equality with literal on the left", "const r = 300 === ua8;", "boolean", nil},
+		{"equality with fractional literal without common type", "const r = ua64 === 1.5;", "boolean", []int32{2367}},
+		{"assertion of literal beyond range", "const r = 300 as u8;", "u8", nil},
+		{"assertion of literal in range", "const r = 1 as u64;", "u64", nil},
+		{"assertion of literal at i64 max", "const r = 9223372036854775807 as i64;", "i64", nil},
+		{"assertion of negative literal to unsigned", "const r = -1 as u64;", "u64", []int32{2352}},
+		{"assertion of fractional literal to float", "const r = 1.5 as f32;", "f32", nil},
+		{"assertion of literal union", "const r = (c ? 1 : 2) as u64;", "u64", nil},
+		{"assertion of literal to literal is left to tsc", "const r = 1 as 2;", "2", nil},
+		{"assertion of fractional literal without common type", "const r = 1.5 as u64;", "u64", []int32{2352}},
+		{"switch case literal beyond range", "switch (ua8) { case 300: break; }", "", nil},
+		{"switch case fractional literal without common type", "switch (ua64) { case 1.5: break; }", "", []int32{2678}},
 		{"redeclaration", "var v: i32;\nvar v: i64;", "", []int32{2403}},
 		{"number assignment", "const r: i32 = n;", "i32", []int32{2322}},
 		{"number assignment to f64", "const r: f64 = n;", "f64", nil},
@@ -264,6 +312,7 @@ func TestSscRelations(t *testing.T) {
 		{"overload first match", "declare function o(v: i32): 'i32';\ndeclare function o(v: i64): 'i64';\nconst r = o(a32);", `"i32"`, nil},
 		{"union target with string", "const r: i32 | string = a64;", "", []int32{2322}},
 		{"optional target", "const r: i64 | undefined = a32;", "", nil},
+		{"lossy optional target", "const r: i32 | undefined = a64;", "", []int32{2322}},
 		{"switch case comparability", "switch (a32) { case a64: break; case ua64: break; }", "", []int32{2678}},
 		{"tuple element", "const t: [string, i32] = ['a', a32];\nconst r = t[1];", "i32", nil},
 		{"conditional with literal", "const r = c ? a32 : 1;", "1 | i32", nil},
@@ -277,6 +326,78 @@ func TestSscRelations(t *testing.T) {
 		{"plain object", "const r = { a: 1, b: a32, c: a32 + a64, d: n };", "{ a: number; b: i32; c: i64; d: number; }", nil},
 		{"const tuple", "const r = [1, a32, a64] as const;", "readonly [1, i32, i64]", nil},
 		{"nested const object", "const r = { nested: { a: 1, b: ua8 } } as const;", "{ readonly nested: { readonly a: 1; readonly b: u8; }; }", nil},
+		{"literal at u8 max", "const r: u8 = 255;", "u8", nil},
+		{"literal over u8", "const r: u8 = 256;", "u8", []int32{2322}},
+		{"negative literal to unsigned", "const r: u8 = -1;", "u8", []int32{2322}},
+		{"literal at i8 min", "const r: i8 = -128;", "i8", nil},
+		{"literal below i8", "const r: i8 = -129;", "i8", []int32{2322}},
+		{"literal at i32 max", "const r: i32 = 2147483647;", "i32", nil},
+		{"literal over i32", "const r: i32 = 2147483648;", "i32", []int32{2322}},
+		{"literal at u32 max", "const r: u32 = 4294967295;", "u32", nil},
+		{"fractional literal to integer", "const r: i32 = 1.5;", "i32", []int32{2322}},
+		{"fractional literal to f64", "const r: f64 = 1.5;", "f64", nil},
+		{"exact literal to f32", "const r: f32 = 0.5;", "f32", nil},
+		{"inexact literal to f32", "const r: f32 = 0.1;", "f32", nil},
+		{"literal argument out of range", "declare function take(v: u8): void;\ntake(300);", "", []int32{2345}},
+		{"literal return out of range", "function f(): u8 { return 300; }", "", []int32{2322}},
+		{"literal array element out of range", "const r: u8[] = [1, 300];", "u8[]", []int32{2322}},
+		{"literal union out of range", "const r: u8 = c ? 1 : 300;", "u8", []int32{2322}},
+		{"fractional literal to number is left to tsc", "const r: number = 1.5;", "number", nil},
+		{"exponent literal to integer", "const r: i32 = 1e3;", "i32", nil},
+		{"fractional exponent literal to integer", "const r: i32 = 1.5e1;", "i32", nil},
+		{"negative exponent literal to integer", "const r: i32 = 1e-3;", "i32", []int32{2322}},
+		{"hex literal at u8 max", "const r: u8 = 0xff;", "u8", nil},
+		{"hex literal over u8", "const r: u8 = 0x100;", "u8", []int32{2322}},
+		{"separated literal", "const r: i32 = 1_000_000;", "i32", nil},
+		{"literal at i64 max", "const r: i64 = 9223372036854775807;", "i64", nil},
+		{"literal over i64", "const r: i64 = 9223372036854775808;", "i64", []int32{2322}},
+		{"literal at i64 min", "const r: i64 = -9223372036854775808;", "i64", nil},
+		{"literal below i64", "const r: i64 = -9223372036854775809;", "i64", []int32{2322}},
+		{"literal at u64 max", "const r: u64 = 18446744073709551615;", "u64", nil},
+		{"literal over u64", "const r: u64 = 18446744073709551616;", "u64", []int32{2322}},
+		{"literal over f32", "const r: f32 = 1e39;", "f32", nil},
+		{"literal under f32", "const r: f32 = 1e-50;", "f32", nil},
+		{"zero literal to f32", "const r: f32 = 0.0;", "f32", nil},
+		{"literal over f64", "const r: f64 = 1e309;", "f64", nil},
+		{"literal under f64", "const r: f64 = 1e-400;", "f64", nil},
+		{"literal over number", "const r: number = 1e309;", "number", nil},
+		{"literal in optional ssc target", "const r: u8 | undefined = 300;", "", []int32{2322}},
+		{"hex literal at u64 max", "const r: u64 = 0xffffffffffffffff;", "u64", nil},
+		{"hex literal over u64", "const r: u64 = 0x1_0000_0000_0000_0000;", "u64", []int32{2322}},
+		{"binary literal at u8 max", "const r: u8 = 0b1111_1111;", "u8", nil},
+		{"binary literal over u8", "const r: u8 = 0b1_0000_0000;", "u8", []int32{2322}},
+		{"octal literal at u8 max", "const r: u8 = 0o377;", "u8", nil},
+		{"octal literal over u8", "const r: u8 = 0o400;", "u8", []int32{2322}},
+		{"separated literal at i64 min", "const r: i64 = -9_223_372_036_854_775_808;", "i64", nil},
+		{"negative zero to unsigned", "const r: u8 = -0;", "u8", nil},
+		{"plus literal at u8 max", "const r: u8 = +255;", "u8", nil},
+		{"plus literal over u8", "const r: u8 = +300;", "u8", []int32{2322}},
+		{"negated parenthesized literal is f64", "const r: i8 = -(128);", "i8", []int32{2322}},
+		{"integer valued fraction", "const r: u8 = 255.0;", "u8", nil},
+		{"integer valued exponent", "const r: u8 = 2.55e2;", "u8", nil},
+		{"large literal through a variable", "const a = 9223372036854775807;\nconst r: i64 = a;", "i64", nil},
+		{"large literal over i64 through a variable", "const a = 9223372036854775808;\nconst r: i64 = a;", "i64", []int32{2322}},
+		{"same large literals", "const r = 9223372036854775807 === 9223372036854775807;", "boolean", nil},
+		{"large literals rounding to the same float", "const r = 9223372036854775807 === 9223372036854775806;", "boolean", []int32{2367}},
+		{"literal over range in object", "const r: { v: u8 } = { v: 300 };", "", []int32{2322}},
+		{"literal over range in tuple", "const r: [i32, u8] = [1, 300];", "", []int32{2322}},
+		{"literal over range as default parameter", "function f(v: u8 = 300) { return v; }", "", []int32{2322}},
+		{"literal at u64 max as return", "function f(): u64 { return 18446744073709551615; }", "", nil},
+		{"literal over range to optional parameter", "declare function f(v?: u8): void;\nf(300);", "", []int32{2345}},
+		{"literal over range to generic constraint", "declare function g<T extends u8>(v: T): T;\nconst r = g(300);", "", []int32{2345}},
+		{"overload skips a literal over range", "declare function f(v: u8): u8;\ndeclare function f(v: u16): u16;\nconst r = f(300);", "u16", nil},
+		{"overload takes a literal in range", "declare function f(v: u8): u8;\ndeclare function f(v: u16): u16;\nconst r = f(255);", "u8", nil},
+		{"overload with a literal operand over range", "declare function f(p: u8, q: u8): u8;\ndeclare function f(p: u16, q: u16): u16;\nconst r = f(ua8, 300);", "u16", nil},
+		{"overload without a literal in range", "declare function f(v: u8): u8;\ndeclare function f(v: i8): i8;\nconst r = f(300);", "", []int32{2769}},
+		{"returns keep a literal over range", "function f() { if (c) { return ua8; } return 300; }\nconst r = f();", "300 | u8", nil},
+		{"huge literal without context", "const r = 1e1000;", "", nil},
+		{"tiny literal without context", "const r = 1e-1000;", "", nil},
+		{"negative huge literal without context", "const r = -1e1000;", "", nil},
+		{"plus huge literal without context", "const r = +1e1000;", "", nil},
+		{"huge literal in integer context", "const r: u64 = 1e400;", "u64", []int32{2322}},
+		{"huge exponent literal in integer context", "const r: u64 = 1e1000;", "u64", []int32{2322}},
+		{"tiny exponent literal in integer context is 0", "const r: i32 = 1e-1000;", "i32", nil},
+		{"long mantissa with large negative exponent", "const r = 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e-800;", "", nil},
 		{"never assignment", "declare const nv: never;\nconst r: i32 = nv;", "i32", nil},
 		{"any assignment is left to tsc", "const r: i32 = x;", "i32", nil},
 	}
@@ -290,6 +411,22 @@ func TestSscRelations(t *testing.T) {
 			assert.DeepEqual(t, result.codes, tc.codes)
 		})
 	}
+}
+
+func TestSscLargeLiteralSuggestion(t *testing.T) {
+	t.Parallel()
+	t.Run("suppressed in ssc mode", func(t *testing.T) {
+		t.Parallel()
+		result := ssc_checkSource(t, "const r: u64 = 18446744073709551615;")
+		assert.Assert(t, !slices.Contains(result.suggestionCodes, 80008))
+	})
+	t.Run("reported without prelude", func(t *testing.T) {
+		t.Parallel()
+		result := ssc_check(t, map[string]string{
+			"/main.ts": "const r = 18446744073709551615;\nexport {};\n",
+		}, []string{"main.ts"})
+		assert.Assert(t, slices.Contains(result.suggestionCodes, 80008))
+	})
 }
 
 func TestSscPreludeIdentification(t *testing.T) {
@@ -310,6 +447,32 @@ export {};
 		}, []string{"node_modules/other/prelude.d.ts", "main.ts"})
 		assert.Equal(t, result.resultType, "number")
 		assert.DeepEqual(t, result.codes, []int32(nil))
+	})
+	t.Run("partial prelude disables ssc mode", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			name       string
+			source     string
+			resultType string
+		}{
+			{"lossy assignment", "declare const q: i64;\nconst r: i32 = q;", "i32"},
+			{"unary plus", "declare const p: i32;\nconst r = +p;", "number"},
+			{"literal in ssc context", "const o = { v: 1 } satisfies { v: i32 };\nconst r = o.v;", "number"},
+			{"huge literal", "const r = 1e1000;", "Infinity"},
+			{"literal over i64", "const r: i64 = 9223372036854775808;", "i64"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				result := ssc_check(t, map[string]string{
+					"/node_modules/syscript/package.json": `{ "name": "syscript", "version": "0.0.0" }`,
+					"/node_modules/syscript/prelude.d.ts": strings.Replace(ssc_prelude, "  type f32 = number & {};\n", "", 1),
+					"/main.ts":                            tc.source + "\nexport {};\n",
+				}, []string{"node_modules/syscript/prelude.d.ts", "main.ts"})
+				assert.Equal(t, result.resultType, tc.resultType)
+				assert.DeepEqual(t, result.codes, []int32(nil))
+			})
+		}
 	})
 	t.Run("prelude outside the syscript package", func(t *testing.T) {
 		t.Parallel()

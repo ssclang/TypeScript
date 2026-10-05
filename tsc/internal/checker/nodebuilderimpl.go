@@ -3446,6 +3446,9 @@ func (b *NodeBuilderImpl) typeToTypeNode(t *Type) *ast.TypeNode {
 		return b.f.NewLiteralTypeNode(lit)
 	}
 	if t.flags&TypeFlagsNumberLiteral != 0 {
+		if ssc_node := b.ssc_NumberLiteralTypeNode(t); ssc_node != nil { // syscript
+			return ssc_node
+		}
 		value := t.AsLiteralType().value.(jsnum.Number)
 		b.ctx.approximateLength += len(value.String())
 		if value < 0 {
