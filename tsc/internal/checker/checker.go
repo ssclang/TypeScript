@@ -7,6 +7,7 @@ import (
 	"iter"
 	"maps"
 	"math"
+	"math/big"
 	"slices"
 	"strconv"
 	"strings"
@@ -925,6 +926,9 @@ type Checker struct {
 
 	ssc_PreludeSymbolSet    map[*ast.Symbol]bool   // syscript
 	ssc_PreludeSymbolByName map[string]*ast.Symbol // syscript
+	ssc_Enabled             bool                   // syscript
+	ssc_LiteralTypeByValue  map[string]*Type       // syscript
+	ssc_LiteralValueByType  map[*Type]*big.Int     // syscript
 }
 
 func NewChecker(program Program, tracer *Tracer) (*Checker, *sync.Mutex) {
@@ -7965,6 +7969,9 @@ func (c *Checker) checkExpressionWorker(node *ast.Node, checkMode CheckMode) *Ty
 		return c.getFreshTypeOfLiteralType(c.getStringLiteralType(node.Text()))
 	case ast.KindNumericLiteral:
 		c.checkGrammarNumericLiteral(node.AsNumericLiteral())
+		if ssc_type := c.ssc_NumberLiteralType(node, false); ssc_type != nil { // syscript
+			return c.getFreshTypeOfLiteralType(ssc_type)
+		}
 		return c.getFreshTypeOfLiteralType(c.getNumberLiteralType(jsnum.FromString(node.Text())))
 	case ast.KindBigIntLiteral:
 		c.checkGrammarBigIntLiteral(node.AsBigIntLiteral())
@@ -11115,8 +11122,14 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
 	case ast.KindNumericLiteral:
 		switch expr.Operator {
 		case ast.KindMinusToken:
+			if ssc_type := c.ssc_NumberLiteralType(expr.Operand, true); ssc_type != nil { // syscript
+				return c.getFreshTypeOfLiteralType(ssc_type)
+			}
 			return c.getFreshTypeOfLiteralType(c.getNumberLiteralType(-jsnum.FromString(expr.Operand.Text())))
 		case ast.KindPlusToken:
+			if ssc_type := c.ssc_NumberLiteralType(expr.Operand, false); ssc_type != nil { // syscript
+				return c.getFreshTypeOfLiteralType(ssc_type)
+			}
 			return c.getFreshTypeOfLiteralType(c.getNumberLiteralType(+jsnum.FromString(expr.Operand.Text())))
 		}
 	case ast.KindBigIntLiteral:
@@ -12582,6 +12595,9 @@ func (c *Checker) checkAssertionDeferred(node *ast.Node) {
 	exprType := c.getRegularTypeOfObjectLiteral(c.getBaseTypeOfLiteralType(c.assertionLinks.Get(node).exprType))
 	targetType := c.getTypeFromTypeNode(typeNode)
 	if !c.isErrorType(targetType) {
+		if c.ssc_IsLiteralAgainstSscType(c.assertionLinks.Get(node).exprType, targetType) { // syscript
+			exprType = c.getRegularTypeOfLiteralType(c.assertionLinks.Get(node).exprType)
+		}
 		widenedType := c.getWidenedType(exprType)
 		if !c.isTypeComparableTo(targetType, widenedType) {
 			errNode := node
@@ -13025,6 +13041,9 @@ func (c *Checker) reportOperatorErrorUnless(leftType *Type, operator ast.Kind, r
 }
 
 func (c *Checker) getBaseTypesIfUnrelated(leftType *Type, rightType *Type, isRelated func(left *Type, right *Type) bool) (*Type, *Type) {
+	if c.ssc_IsLiteralAgainstSscType(leftType, rightType) || c.ssc_IsLiteralAgainstSscType(rightType, leftType) { // syscript
+		return leftType, rightType
+	}
 	effectiveLeft := leftType
 	effectiveRight := rightType
 	leftBase := c.getBaseTypeOfLiteralType(leftType)
@@ -26132,8 +26151,8 @@ func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t *Type, contextual
 
 func (c *Checker) isLiteralOfContextualType(candidateType *Type, contextualType *Type) bool {
 	if contextualType != nil {
-		if contextualType.flags&TypeFlagsNumber == 0 && c.ssc_symbol(contextualType) != nil { // syscript
-			return c.maybeTypeOfKind(candidateType, TypeFlagsNumberLiteral)
+		if isSsc, result := c.ssc_IsLiteralOfContextualType(candidateType, contextualType); isSsc { // syscript
+			return result
 		}
 		if contextualType.flags&TypeFlagsUnionOrIntersection != 0 {
 			return core.Some(contextualType.Types(), func(t *Type) bool {

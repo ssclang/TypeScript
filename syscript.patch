@@ -1,18 +1,54 @@
 diff --git a/tsc/internal/checker/checker.go b/tsc/internal/checker/checker.go
-index 345ea00ce1..bf70d717dd 100644
+index 345ea00ce1..cff7d640b8 100644
 --- a/tsc/internal/checker/checker.go
 +++ b/tsc/internal/checker/checker.go
-@@ -909,6 +909,9 @@ type Checker struct {
+@@ -7,6 +7,7 @@ import (
+ 	"iter"
+ 	"maps"
+ 	"math"
++	"math/big"
+ 	"slices"
+ 	"strconv"
+ 	"strings"
+@@ -909,6 +910,12 @@ type Checker struct {
  
  	mu     sync.Mutex
  	tracer *Tracer // Optional tracer for trace events and type recording (for --generateTrace)
 +
 +	ssc_PreludeSymbolSet    map[*ast.Symbol]bool   // syscript
 +	ssc_PreludeSymbolByName map[string]*ast.Symbol // syscript
++	ssc_Enabled             bool                   // syscript
++	ssc_LiteralTypeByValue  map[string]*Type       // syscript
++	ssc_LiteralValueByType  map[*Type]*big.Int     // syscript
  }
  
  func NewChecker(program Program, tracer *Tracer) (*Checker, *sync.Mutex) {
-@@ -11114,6 +11117,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
+@@ -7950,6 +7957,9 @@ func (c *Checker) checkExpressionWorker(node *ast.Node, checkMode CheckMode) *Ty
+ 		return c.getFreshTypeOfLiteralType(c.getStringLiteralType(node.Text()))
+ 	case ast.KindNumericLiteral:
+ 		c.checkGrammarNumericLiteral(node.AsNumericLiteral())
++		if ssc_type := c.ssc_NumberLiteralType(node, false); ssc_type != nil { // syscript
++			return c.getFreshTypeOfLiteralType(ssc_type)
++		}
+ 		return c.getFreshTypeOfLiteralType(c.getNumberLiteralType(jsnum.FromString(node.Text())))
+ 	case ast.KindBigIntLiteral:
+ 		c.checkGrammarBigIntLiteral(node.AsBigIntLiteral())
+@@ -11099,8 +11109,14 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
+ 	case ast.KindNumericLiteral:
+ 		switch expr.Operator {
+ 		case ast.KindMinusToken:
++			if ssc_type := c.ssc_NumberLiteralType(expr.Operand, true); ssc_type != nil { // syscript
++				return c.getFreshTypeOfLiteralType(ssc_type)
++			}
+ 			return c.getFreshTypeOfLiteralType(c.getNumberLiteralType(-jsnum.FromString(expr.Operand.Text())))
+ 		case ast.KindPlusToken:
++			if ssc_type := c.ssc_NumberLiteralType(expr.Operand, false); ssc_type != nil { // syscript
++				return c.getFreshTypeOfLiteralType(ssc_type)
++			}
+ 			return c.getFreshTypeOfLiteralType(c.getNumberLiteralType(+jsnum.FromString(expr.Operand.Text())))
+ 		}
+ 	case ast.KindBigIntLiteral:
+@@ -11114,6 +11130,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
  		if c.maybeTypeOfKindConsideringBaseConstraint(operandType, TypeFlagsESSymbolLike) {
  			c.error(expr.Operand, diagnostics.The_0_operator_cannot_be_applied_to_type_symbol, scanner.TokenToString(expr.Operator))
  		}
@@ -22,7 +58,7 @@ index 345ea00ce1..bf70d717dd 100644
  		if expr.Operator == ast.KindPlusToken {
  			if c.maybeTypeOfKindConsideringBaseConstraint(operandType, TypeFlagsBigIntLike) {
  				c.error(expr.Operand, diagnostics.Operator_0_cannot_be_applied_to_type_1, scanner.TokenToString(expr.Operator), c.TypeToString(c.getBaseTypeOfLiteralType(operandType)))
-@@ -11138,6 +11144,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
+@@ -11138,6 +11157,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
  			// run check only if former checks succeeded to avoid reporting cascading errors
  			c.checkReferenceExpression(expr.Operand, diagnostics.The_operand_of_an_increment_or_decrement_operator_must_be_a_variable_or_a_property_access, diagnostics.The_operand_of_an_increment_or_decrement_operator_may_not_be_an_optional_property_access)
  		}
@@ -32,7 +68,7 @@ index 345ea00ce1..bf70d717dd 100644
  		return c.getUnaryResultType(operandType)
  	}
  	return c.errorType
-@@ -11154,6 +11163,9 @@ func (c *Checker) checkPostfixUnaryExpression(node *ast.Node) *Type {
+@@ -11154,6 +11176,9 @@ func (c *Checker) checkPostfixUnaryExpression(node *ast.Node) *Type {
  		// run check only if former checks succeeded to avoid reporting cascading errors
  		c.checkReferenceExpression(expr.Operand, diagnostics.The_operand_of_an_increment_or_decrement_operator_must_be_a_variable_or_a_property_access, diagnostics.The_operand_of_an_increment_or_decrement_operator_may_not_be_an_optional_property_access)
  	}
@@ -42,7 +78,17 @@ index 345ea00ce1..bf70d717dd 100644
  	return c.getUnaryResultType(operandType)
  }
  
-@@ -12623,6 +12635,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12557,6 +12582,9 @@ func (c *Checker) checkAssertionDeferred(node *ast.Node) {
+ 	exprType := c.getRegularTypeOfObjectLiteral(c.getBaseTypeOfLiteralType(c.assertionLinks.Get(node).exprType))
+ 	targetType := c.getTypeFromTypeNode(typeNode)
+ 	if !c.isErrorType(targetType) {
++		if c.ssc_IsLiteralAgainstSscType(c.assertionLinks.Get(node).exprType, targetType) { // syscript
++			exprType = c.getRegularTypeOfLiteralType(c.assertionLinks.Get(node).exprType)
++		}
+ 		widenedType := c.getWidenedType(exprType)
+ 		if !c.isTypeComparableTo(targetType, widenedType) {
+ 			errNode := node
+@@ -12623,6 +12651,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  		// If both are any or unknown, allow operation; assume it will resolve to number
  		if c.isTypeAssignableToKind(leftType, TypeFlagsAnyOrUnknown) && c.isTypeAssignableToKind(rightType, TypeFlagsAnyOrUnknown) || !c.maybeTypeOfKind(leftType, TypeFlagsBigIntLike) && !c.maybeTypeOfKind(rightType, TypeFlagsBigIntLike) {
  			resultType = c.numberType
@@ -52,7 +98,7 @@ index 345ea00ce1..bf70d717dd 100644
  		} else if c.bothAreBigIntLike(leftType, rightType) {
  			switch operator {
  			case ast.KindGreaterThanGreaterThanGreaterThanToken, ast.KindGreaterThanGreaterThanGreaterThanEqualsToken:
-@@ -12664,6 +12679,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12664,6 +12695,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  			// Operands of an enum type are treated as having the primitive type Number.
  			// If both operands are of the Number primitive type, the result is of the Number primitive type.
  			resultType = c.numberType
@@ -62,7 +108,7 @@ index 345ea00ce1..bf70d717dd 100644
  		} else if c.isTypeAssignableToKindEx(leftType, TypeFlagsBigIntLike, true /*strict*/) && c.isTypeAssignableToKindEx(rightType, TypeFlagsBigIntLike, true /*strict*/) {
  			// If both operands are of the BigInt primitive type, the result is of the BigInt primitive type.
  			resultType = c.bigintType
-@@ -12677,6 +12695,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12677,6 +12711,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  				resultType = c.errorType
  			} else {
  				resultType = c.anyType
@@ -72,7 +118,7 @@ index 345ea00ce1..bf70d717dd 100644
  			}
  		}
  		// Symbols are not allowed at all in arithmetic expressions
-@@ -12699,6 +12720,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12699,6 +12736,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  		}
  		return resultType
  	case ast.KindLessThanToken, ast.KindGreaterThanToken, ast.KindLessThanEqualsToken, ast.KindGreaterThanEqualsToken:
@@ -82,7 +128,17 @@ index 345ea00ce1..bf70d717dd 100644
  		if c.checkForDisallowedESSymbolOperand(left, right, leftType, rightType, operator) {
  			leftType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(leftType, left))
  			rightType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(rightType, right))
-@@ -13042,6 +13066,9 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
+@@ -12988,6 +13028,9 @@ func (c *Checker) reportOperatorErrorUnless(leftType *Type, operator ast.Kind, r
+ }
+ 
+ func (c *Checker) getBaseTypesIfUnrelated(leftType *Type, rightType *Type, isRelated func(left *Type, right *Type) bool) (*Type, *Type) {
++	if c.ssc_IsLiteralAgainstSscType(leftType, rightType) || c.ssc_IsLiteralAgainstSscType(rightType, leftType) { // syscript
++		return leftType, rightType
++	}
+ 	effectiveLeft := leftType
+ 	effectiveRight := rightType
+ 	leftBase := c.getBaseTypeOfLiteralType(leftType)
+@@ -13042,6 +13085,9 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
  }
  
  func (c *Checker) checkArithmeticOperandType(operand *ast.Node, t *Type, diagnostic *diagnostics.Message, isAwaitValid bool) bool {
@@ -92,17 +148,17 @@ index 345ea00ce1..bf70d717dd 100644
  	if !c.isTypeAssignableTo(t, c.numberOrBigIntType) {
  		var awaitedType *Type
  		if isAwaitValid {
-@@ -26060,6 +26087,9 @@ func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t *Type, contextual
+@@ -26060,6 +26106,9 @@ func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t *Type, contextual
  
  func (c *Checker) isLiteralOfContextualType(candidateType *Type, contextualType *Type) bool {
  	if contextualType != nil {
-+		if contextualType.flags&TypeFlagsNumber == 0 && c.ssc_symbol(contextualType) != nil { // syscript
-+			return c.maybeTypeOfKind(candidateType, TypeFlagsNumberLiteral)
++		if isSsc, result := c.ssc_IsLiteralOfContextualType(candidateType, contextualType); isSsc { // syscript
++			return result
 +		}
  		if contextualType.flags&TypeFlagsUnionOrIntersection != 0 {
  			return core.Some(contextualType.Types(), func(t *Type) bool {
  				return c.isLiteralOfContextualType(candidateType, t)
-@@ -28185,6 +28215,11 @@ func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict
+@@ -28185,6 +28234,11 @@ func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict
  	if source.flags&kind != 0 {
  		return true
  	}
@@ -114,8 +170,37 @@ index 345ea00ce1..bf70d717dd 100644
  	if strict && source.flags&(TypeFlagsAnyOrUnknown|TypeFlagsVoid|TypeFlagsUndefined|TypeFlagsNull) != 0 {
  		return false
  	}
+diff --git a/tsc/internal/checker/grammarchecks.go b/tsc/internal/checker/grammarchecks.go
+index 93bed4b355..8044aff084 100644
+--- a/tsc/internal/checker/grammarchecks.go
++++ b/tsc/internal/checker/grammarchecks.go
+@@ -2081,6 +2081,10 @@ func (c *Checker) checkGrammarNumericLiteral(node *ast.NumericLiteral) {
+ 		return
+ 	}
+ 
++	if c.ssc_IsEnabled() { // syscript
++		return
++	}
++
+ 	c.addErrorOrSuggestion(false, createDiagnosticForNode(node.AsNode(), diagnostics.Numeric_literals_with_absolute_values_equal_to_2_53_or_greater_are_too_large_to_be_represented_accurately_as_integers))
+ }
+ 
+diff --git a/tsc/internal/checker/nodebuilderimpl.go b/tsc/internal/checker/nodebuilderimpl.go
+index cd4643ac6f..c3dcb52536 100644
+--- a/tsc/internal/checker/nodebuilderimpl.go
++++ b/tsc/internal/checker/nodebuilderimpl.go
+@@ -3446,6 +3446,9 @@ func (b *NodeBuilderImpl) typeToTypeNode(t *Type) *ast.TypeNode {
+ 		return b.f.NewLiteralTypeNode(lit)
+ 	}
+ 	if t.flags&TypeFlagsNumberLiteral != 0 {
++		if ssc_node := b.ssc_NumberLiteralTypeNode(t); ssc_node != nil { // syscript
++			return ssc_node
++		}
+ 		value := t.AsLiteralType().value.(jsnum.Number)
+ 		b.ctx.approximateLength += len(value.String())
+ 		if value < 0 {
 diff --git a/tsc/internal/checker/relater.go b/tsc/internal/checker/relater.go
-index a9bc484fef..9c3b67d58d 100644
+index a9bc484fef..9396680352 100644
 --- a/tsc/internal/checker/relater.go
 +++ b/tsc/internal/checker/relater.go
 @@ -176,6 +176,9 @@ func (c *Checker) isTypeRelatedTo(source *Type, target *Type, relation *Relation
@@ -138,25 +223,44 @@ index a9bc484fef..9c3b67d58d 100644
  	if r.relation == r.c.identityRelation {
  		if source.flags != target.flags {
  			return TernaryFalse
+@@ -2689,6 +2695,9 @@ func (r *Relater) isRelatedToEx(originalSource *Type, originalTarget *Type, recu
+ 			if source == target {
+ 				return TernaryTrue
+ 			}
++			if isSsc, result := r.ssc_RelatedOrReportError(originalSource, originalTarget, source, target, reportErrors, headMessage); isSsc { // syscript
++				return result
++			}
+ 		}
+ 	}
+ 	if r.relation == r.c.comparableRelation && target.flags&TypeFlagsNever == 0 && r.c.isSimpleTypeRelatedTo(target, source, r.relation, nil) ||
 diff --git a/tsc/internal/checker/ssc.go b/tsc/internal/checker/ssc.go
 new file mode 100644
-index 0000000000..c927ddb09e
+index 0000000000..06d5f56af7
 --- /dev/null
 +++ b/tsc/internal/checker/ssc.go
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,386 @@
 +package checker
 +
 +import (
++	"cmp"
++	"math"
++	"math/big"
 +	"slices"
++	"strings"
 +
 +	"github.com/microsoft/TypeScript/tsc/internal/ast"
 +	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
++	"github.com/microsoft/TypeScript/tsc/internal/jsnum"
 +	"github.com/microsoft/TypeScript/tsc/internal/scanner"
 +)
 +
-+var ssc_sortedTypes = []string{"i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64"}
++var ssc_signedTypes = []string{"i8", "i16", "i32", "i64"}
++
++var ssc_unsignedTypes = []string{"u8", "u16", "u32", "u64"}
 +
 +var ssc_floatTypes = []string{"f32", "f64"}
++
++var ssc_types = slices.Concat(ssc_signedTypes, ssc_unsignedTypes, ssc_floatTypes)
 +
 +var ssc_bitwiseOperators = []ast.Kind{
 +	ast.KindAmpersandEqualsToken,
@@ -193,7 +297,7 @@ index 0000000000..c927ddb09e
 +	}
 +	symbolSet = map[*ast.Symbol]bool{}
 +	symbolByName = map[string]*ast.Symbol{}
-+	for name := range slices.Values(ssc_sortedTypes) {
++	for name := range slices.Values(ssc_types) {
 +		symbol := c.getGlobalSymbol(name, ast.SymbolFlagsTypeAlias, nil)
 +		if symbol == nil {
 +			continue
@@ -221,11 +325,12 @@ index 0000000000..c927ddb09e
 +	}
 +	c.ssc_PreludeSymbolSet = symbolSet
 +	c.ssc_PreludeSymbolByName = symbolByName
++	c.ssc_Enabled = len(symbolByName) == len(ssc_types)
 +	return symbolSet, symbolByName
 +}
 +
 +func (c *Checker) ssc_symbol(t *Type) *ast.Symbol {
-+	symbolSet, symbolByName := c.ssc_loadPrelude() // loaded on the first lookup instead of in NewChecker, to keep code injected into checker.go minimal
++	symbolSet, symbolByName := c.ssc_loadPrelude()
 +	if t.flags&TypeFlagsNumber != 0 {
 +		return symbolByName["f64"]
 +	}
@@ -235,8 +340,17 @@ index 0000000000..c927ddb09e
 +	return nil
 +}
 +
++func (c *Checker) ssc_IsEnabled() bool {
++	c.ssc_loadPrelude()
++	return c.ssc_Enabled
++}
++
 +func (c *Checker) ssc_CommonType(types ...*Type) (isSsc bool, commonType *Type) {
++	if !c.ssc_IsEnabled() {
++		return false, nil
++	}
 +	var symbols []*ast.Symbol
++	var literals []*Type
 +	for t := range slices.Values(types) {
 +		memberTypes := []*Type{t}
 +		if t.flags&TypeFlagsUnion != 0 {
@@ -244,6 +358,7 @@ index 0000000000..c927ddb09e
 +		}
 +		for memberType := range slices.Values(memberTypes) {
 +			if memberType.flags&TypeFlagsNumberLiteral != 0 {
++				literals = append(literals, memberType)
 +				continue
 +			}
 +			symbol := c.ssc_symbol(memberType)
@@ -256,8 +371,29 @@ index 0000000000..c927ddb09e
 +	if len(symbols) == 0 {
 +		return false, nil
 +	}
-+	for name := range slices.Values(ssc_sortedTypes) {
++	isFloat := slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return slices.Contains(ssc_floatTypes, symbol.Name()) }) ||
++		slices.ContainsFunc(literals, func(literal *Type) bool {
++			isInteger, _ := c.ssc_literalInteger(literal)
++			return !isInteger
++		})
++	isSigned := slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return slices.Contains(ssc_signedTypes, symbol.Name()) }) ||
++		slices.ContainsFunc(literals, func(literal *Type) bool {
++			isInteger, value := c.ssc_literalInteger(literal)
++			return isInteger && value.Sign() < 0
++		})
++	var candidates []string
++	if isFloat {
++		candidates = ssc_floatTypes
++	} else if isSigned {
++		candidates = slices.Concat(ssc_signedTypes, ssc_floatTypes)
++	} else {
++		candidates = slices.Concat(ssc_unsignedTypes, ssc_floatTypes)
++	}
++	for name := range slices.Values(candidates) {
 +		if slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return !slices.Contains(ssc_losslessTargets[symbol.Name()], name) }) {
++			continue
++		}
++		if slices.ContainsFunc(literals, func(literal *Type) bool { return !c.ssc_isLiteralInRange(literal, name) }) {
 +			continue
 +		}
 +		_, symbolByName := c.ssc_loadPrelude()
@@ -271,6 +407,9 @@ index 0000000000..c927ddb09e
 +}
 +
 +func (c *Checker) ssc_UnaryResultTypeOrReportError(operandType *Type, operator ast.Kind, errorNode *ast.Node) *Type {
++	if !c.ssc_IsEnabled() {
++		return nil
++	}
 +	isSsc, result := c.ssc_CommonType(operandType)
 +	if !isSsc {
 +		return nil
@@ -281,6 +420,8 @@ index 0000000000..c927ddb09e
 +		if f64Symbol := symbolByName["f64"]; f64Symbol != nil {
 +			_, result = c.ssc_CommonType(operandType, c.getDeclaredTypeOfSymbol(f64Symbol))
 +		}
++	} else if operator == ast.KindMinusToken {
++		_, result = c.ssc_CommonType(operandType, c.getNumberLiteralType(-1))
 +	}
 +	if result != nil && slices.Contains(ssc_floatTypes, c.ssc_symbol(result).Name()) && slices.Contains(ssc_bitwiseOperators, operator) {
 +		result = nil
@@ -293,6 +434,9 @@ index 0000000000..c927ddb09e
 +}
 +
 +func (c *Checker) ssc_BinaryResultType(left *Type, right *Type) (isSsc bool, result *Type) {
++	if !c.ssc_IsEnabled() {
++		return false, nil
++	}
 +	leftIsSsc, _ := c.ssc_CommonType(left)
 +	rightIsSsc, _ := c.ssc_CommonType(right)
 +	if !leftIsSsc && !rightIsSsc {
@@ -303,6 +447,9 @@ index 0000000000..c927ddb09e
 +}
 +
 +func (c *Checker) ssc_BinaryResultTypeOrReportError(left *Type, right *Type, operator ast.Kind, errorNode *ast.Node) *Type {
++	if !c.ssc_IsEnabled() {
++		return nil
++	}
 +	isSsc, result := c.ssc_BinaryResultType(left, right)
 +	if !isSsc {
 +		return nil
@@ -318,17 +465,25 @@ index 0000000000..c927ddb09e
 +}
 +
 +func (c *Checker) ssc_Related(source *Type, target *Type, relation *Relation) (isSsc bool, related bool) {
++	if !c.ssc_IsEnabled() {
++		return false, false
++	}
 +	sourceSymbol := c.ssc_symbol(source)
 +	targetSymbol := c.ssc_symbol(target)
++	if (relation == c.assignableRelation || relation == c.subtypeRelation || relation == c.strictSubtypeRelation) && targetSymbol != nil && source.flags&TypeFlagsNumberLiteral != 0 {
++		return true, c.ssc_isLiteralInRange(source, targetSymbol.Name())
++	}
++	if relation == c.comparableRelation && (sourceSymbol != nil || targetSymbol != nil) {
++		if isSsc, commonType := c.ssc_CommonType(source, target); isSsc {
++			return true, commonType != nil
++		}
++		return false, false
++	}
 +	if sourceSymbol == nil || targetSymbol == nil {
 +		return false, false
 +	}
 +	if relation == c.identityRelation || relation == c.subtypeRelation || relation == c.strictSubtypeRelation {
 +		return true, sourceSymbol == targetSymbol
-+	}
-+	if relation == c.comparableRelation {
-+		_, commonType := c.ssc_CommonType(source, target)
-+		return true, commonType != nil
 +	}
 +	if relation == c.assignableRelation {
 +		return true, slices.Contains(ssc_losslessTargets[sourceSymbol.Name()], targetSymbol.Name())
@@ -337,29 +492,151 @@ index 0000000000..c927ddb09e
 +}
 +
 +func (r *Relater) ssc_RelatedOrReportError(originalSource *Type, originalTarget *Type, source *Type, target *Type, reportErrors bool, headMessage *diagnostics.Message) (isSsc bool, result Ternary) {
++	if !r.c.ssc_IsEnabled() {
++		return false, TernaryFalse
++	}
 +	isSsc, related := r.c.ssc_Related(source, target, r.relation)
 +	if !isSsc {
 +		return false, TernaryFalse
 +	}
-+	if !related {
-+		if reportErrors {
++	if related {
++		return true, TernaryTrue
++	}
++	if reportErrors {
++		if source.flags&TypeFlagsNumberLiteral != 0 && r.relation == r.c.assignableRelation {
++			message := cmp.Or(headMessage, diagnostics.Type_0_is_not_assignable_to_type_1)
++			sourceType, targetType := r.c.getTypeNamesForErrorDisplay(originalSource, originalTarget)
++			r.reportError(message, sourceType, targetType)
++		} else if source.flags&TypeFlagsNumberLiteral != 0 && r.relation == r.c.comparableRelation {
++			message := cmp.Or(headMessage, diagnostics.Type_0_is_not_comparable_to_type_1)
++			sourceType, targetType := r.c.getTypeNamesForErrorDisplay(originalSource, originalTarget)
++			r.reportError(message, sourceType, targetType)
++		} else {
 +			r.reportErrorResults(originalSource, originalTarget, source, target, headMessage)
 +		}
-+		return true, TernaryFalse
 +	}
-+	return true, TernaryTrue
++	return true, TernaryFalse
++}
++
++func (c *Checker) ssc_IsLiteralOfContextualType(candidateType *Type, contextualType *Type) (isSsc bool, result bool) {
++	if !c.ssc_IsEnabled() || contextualType.flags&TypeFlagsNumber != 0 || c.ssc_symbol(contextualType) == nil {
++		return false, false
++	}
++	return true, c.maybeTypeOfKind(candidateType, TypeFlagsNumberLiteral)
++}
++
++var ssc_integerRanges = map[string]struct{ min, max *big.Int }{
++	"i8":  {big.NewInt(math.MinInt8), big.NewInt(math.MaxInt8)},
++	"i16": {big.NewInt(math.MinInt16), big.NewInt(math.MaxInt16)},
++	"i32": {big.NewInt(math.MinInt32), big.NewInt(math.MaxInt32)},
++	"i64": {big.NewInt(math.MinInt64), big.NewInt(math.MaxInt64)},
++	"u8":  {big.NewInt(0), big.NewInt(math.MaxUint8)},
++	"u16": {big.NewInt(0), big.NewInt(math.MaxUint16)},
++	"u32": {big.NewInt(0), big.NewInt(math.MaxUint32)},
++	"u64": {big.NewInt(0), new(big.Int).SetUint64(math.MaxUint64)},
++}
++
++func (c *Checker) ssc_NumberLiteralType(node *ast.Node, negative bool) *Type {
++	if !c.ssc_IsEnabled() {
++		return nil
++	}
++	text := scanner.GetTextOfNode(node)
++	if node.AsNumericLiteral().TokenFlags&(ast.TokenFlagsScientific|ast.TokenFlagsOctal) != 0 || strings.Contains(text, ".") {
++		return nil
++	}
++	value, _ := new(big.Int).SetString(jsnum.ParsePseudoBigInt(strings.ReplaceAll(text, "_", "")), 10)
++	if value.CmpAbs(ssc_integerRanges["u64"].max) > 0 {
++		return nil
++	}
++	if negative {
++		value.Neg(value)
++	}
++	float, accuracy := new(big.Float).SetInt(value).Float64()
++	if accuracy == big.Exact {
++		return nil
++	}
++	if c.ssc_LiteralTypeByValue == nil {
++		c.ssc_LiteralTypeByValue = map[string]*Type{}
++		c.ssc_LiteralValueByType = map[*Type]*big.Int{}
++	}
++	key := value.String()
++	t := c.ssc_LiteralTypeByValue[key]
++	if t == nil {
++		t = c.newLiteralType(TypeFlagsNumberLiteral, jsnum.Number(float), nil)
++		c.ssc_LiteralTypeByValue[key] = t
++		c.ssc_LiteralValueByType[t] = value
++	}
++	return t
++}
++
++func (b *NodeBuilderImpl) ssc_NumberLiteralTypeNode(t *Type) *ast.TypeNode {
++	if !b.ch.ssc_IsEnabled() {
++		return nil
++	}
++	isInteger, value := b.ch.ssc_literalInteger(t)
++	if !isInteger || value.CmpAbs(ssc_integerRanges["u64"].max) > 0 {
++		return nil
++	}
++	text := value.String()
++	b.ctx.approximateLength += len(text)
++	if after, negative := strings.CutPrefix(text, "-"); negative {
++		return b.f.NewLiteralTypeNode(b.f.NewPrefixUnaryExpression(ast.KindMinusToken, b.f.NewNumericLiteral(after, ast.TokenFlagsNone)))
++	}
++	return b.f.NewLiteralTypeNode(b.f.NewNumericLiteral(text, ast.TokenFlagsNone))
++}
++
++func (c *Checker) ssc_literalInteger(t *Type) (isInteger bool, value *big.Int) {
++	if regularType := t.AsLiteralType().regularType; regularType != nil {
++		t = regularType
++	}
++	if value := c.ssc_LiteralValueByType[t]; value != nil {
++		return true, value
++	}
++	number := float64(t.AsLiteralType().value.(jsnum.Number))
++	if math.IsNaN(number) || math.IsInf(number, 0) {
++		return false, nil
++	}
++	float := big.NewFloat(number)
++	if !float.IsInt() {
++		return false, nil
++	}
++	value, _ = float.Int(nil)
++	return true, value
++}
++
++func (c *Checker) ssc_isLiteralInRange(literal *Type, name string) bool {
++	if slices.Contains(ssc_floatTypes, name) {
++		return true
++	}
++	integer, ok := ssc_integerRanges[name]
++	if !ok {
++		return false
++	}
++	isInteger, value := c.ssc_literalInteger(literal)
++	if !isInteger {
++		return false
++	}
++	return integer.min.Cmp(value) <= 0 && value.Cmp(integer.max) <= 0
++}
++
++func (c *Checker) ssc_IsLiteralAgainstSscType(literal *Type, other *Type) bool {
++	if !c.ssc_IsEnabled() || c.ssc_symbol(other) == nil {
++		return false
++	}
++	return everyType(literal, func(t *Type) bool { return t.flags&TypeFlagsNumberLiteral != 0 })
 +}
 diff --git a/tsc/internal/checker/ssc_test.go b/tsc/internal/checker/ssc_test.go
 new file mode 100644
-index 0000000000..7885f4e09f
+index 0000000000..34e340f77b
 --- /dev/null
 +++ b/tsc/internal/checker/ssc_test.go
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,498 @@
 +package checker_test
 +
 +import (
 +	"encoding/json"
 +	"slices"
++	"strings"
 +	"testing"
 +
 +	"github.com/microsoft/TypeScript/tsc/internal/ast"
@@ -418,8 +695,9 @@ index 0000000000..7885f4e09f
 +`
 +
 +type ssc_result struct {
-+	resultType string
-+	codes      []int32
++	resultType      string
++	codes           []int32
++	suggestionCodes []int32
 +}
 +
 +func ssc_check(t *testing.T, files map[string]string, rootFiles []string) ssc_result {
@@ -442,6 +720,9 @@ index 0000000000..7885f4e09f
 +		for diagnostic := range slices.Values(p.GetSemanticDiagnostics(t.Context(), sourceFile)) {
 +			result.codes = append(result.codes, diagnostic.Code())
 +		}
++	}
++	for diagnostic := range slices.Values(p.GetSuggestionDiagnostics(t.Context(), file)) {
++		result.suggestionCodes = append(result.suggestionCodes, diagnostic.Code())
 +	}
 +	c, done := p.GetTypeChecker(t.Context())
 +	defer done()
@@ -479,6 +760,29 @@ index 0000000000..7885f4e09f
 +		{"literal right", "const r = a32 + 1;", "i32", nil},
 +		{"literal left", "const r = 1 + a32;", "i32", nil},
 +		{"literal union", "const r = a32 + lit;", "i32", nil},
++		{"literal beyond operand range", "const r = ua8 + 300;", "u16", nil},
++		{"literal union beyond operand range", "const r = ua8 + (c ? 1 : 300);", "u16", nil},
++		{"negative literal with unsigned", "const r = ua32 + -1;", "i64", nil},
++		{"large literal with unsigned", "const r = ua32 + 5000000000;", "u64", nil},
++		{"literal beyond signed operand range", "const r = a8 + 300;", "i16", nil},
++		{"mixed unions with literals", "const r = (c ? ua8 : a8) + (c ? 300 : -1);", "i16", nil},
++		{"unsigned unions with literals", "const r = (c ? ua8 : ua32) + (c ? 1 : 5000000000);", "u64", nil},
++		{"mixed unions with fractional literal", "const r = (c ? a32 : ua32) + (c ? 1 : 1.5);", "f64", nil},
++		{"mixed unions without common type", "const r = (c ? ua64 : a8) + (c ? 1 : 2);", "any", []int32{2365}},
++		{"signed union with unsigned literal beyond", "const r = (c ? a8 : a16) + (c ? 1 : 40000);", "i32", nil},
++		{"fractional literal", "const r = ua8 + 1.5;", "f32", nil},
++		{"fractional literal widening to f64", "const r = a32 + 1.5;", "f64", nil},
++		{"fractional literal without common type", "const r = ua64 + 1.5;", "any", []int32{2365}},
++		{"literal at i64 max", "const r = a64 + 9223372036854775807;", "i64", nil},
++		{"literal beyond i64 without common type", "const r = a64 + 9223372036854775808;", "any", []int32{2365}},
++		{"bitwise literal beyond operand range", "const r = ua8 & 0x1ff;", "u16", nil},
++		{"bitwise fractional literal", "const r = ua8 & 1.5;", "any", []int32{2365}},
++		{"relational literal beyond operand range", "const r = ua8 < 300;", "boolean", nil},
++		{"compound assignment literal beyond range", "let v: u8 = 0;\nv += 300;", "", []int32{2322}},
++		{"literal at u64 max with u64", "const r = ua64 + 18446744073709551615;", "u64", nil},
++		{"literal over u64 without common type", "const r = ua64 + 18446744073709551616;", "any", []int32{2365}},
++		{"compound assignment literal at u64 max", "let v: u64 = 0;\nv += 18446744073709551615;", "", nil},
++		{"equality with negative literal widens to signed", "const r = ua8 === -1;", "boolean", nil},
 +		{"numeric enum", "const r = a32 * e;", "i32", nil},
 +		{"widen", "const r = a32 + a64;", "i64", nil},
 +		{"widen to third type", "const r = ua32 + a32;", "i64", nil},
@@ -503,6 +807,13 @@ index 0000000000..7885f4e09f
 +		{"unary plus on number", "const r = +n;", "f64", nil},
 +		{"unary union", "const r = -(c ? a32 : a64);", "i64", nil},
 +		{"unary union without common type", "const r = -(c ? a64 : ua64);", "any", []int32{2736}},
++		{"unary minus on f32", "const r = -fa32;", "f32", nil},
++		{"unary minus on u8 widens to signed", "const r = -ua8;", "i16", nil},
++		{"unary minus on u32 widens to signed", "const r = -ua32;", "i64", nil},
++		{"unary minus on u64 without signed type", "const r = -ua64;", "any", []int32{2736}},
++		{"unary minus on mixed union", "const r = -(c ? ua8 : a8);", "i16", nil},
++		{"unary bitwise on unsigned keeps type", "const r = ~ua8;", "u8", nil},
++		{"increment on unsigned keeps type", "const r = ua8++;", "u8", nil},
 +		{"increment union without common type", "let v = c ? a64 : ua64;\nconst r = v++;", "any", []int32{2736}},
 +		{"prefix increment", "const r = ++a64;", "i64", nil},
 +		{"postfix increment", "const r = a32++;", "i32", nil},
@@ -587,6 +898,19 @@ index 0000000000..7885f4e09f
 +		{"equality without common type", "const r = a64 === ua64;", "boolean", []int32{2367}},
 +		{"assertion with common type", "const r = a32 as i64;", "i64", nil},
 +		{"assertion without common type", "const r = ua64 as i64;", "i64", []int32{2352}},
++		{"equality with literal beyond range", "const r = ua8 === 300;", "boolean", nil},
++		{"equality with literal on the left", "const r = 300 === ua8;", "boolean", nil},
++		{"equality with fractional literal without common type", "const r = ua64 === 1.5;", "boolean", []int32{2367}},
++		{"assertion of literal beyond range", "const r = 300 as u8;", "u8", nil},
++		{"assertion of literal in range", "const r = 1 as u64;", "u64", nil},
++		{"assertion of literal at i64 max", "const r = 9223372036854775807 as i64;", "i64", nil},
++		{"assertion of negative literal to unsigned", "const r = -1 as u64;", "u64", []int32{2352}},
++		{"assertion of fractional literal to float", "const r = 1.5 as f32;", "f32", nil},
++		{"assertion of literal union", "const r = (c ? 1 : 2) as u64;", "u64", nil},
++		{"assertion of literal to literal is left to tsc", "const r = 1 as 2;", "2", nil},
++		{"assertion of fractional literal without common type", "const r = 1.5 as u64;", "u64", []int32{2352}},
++		{"switch case literal beyond range", "switch (ua8) { case 300: break; }", "", nil},
++		{"switch case fractional literal without common type", "switch (ua64) { case 1.5: break; }", "", []int32{2678}},
 +		{"redeclaration", "var v: i32;\nvar v: i64;", "", []int32{2403}},
 +		{"number assignment", "const r: i32 = n;", "i32", []int32{2322}},
 +		{"number assignment to f64", "const r: f64 = n;", "f64", nil},
@@ -621,6 +945,7 @@ index 0000000000..7885f4e09f
 +		{"overload first match", "declare function o(v: i32): 'i32';\ndeclare function o(v: i64): 'i64';\nconst r = o(a32);", `"i32"`, nil},
 +		{"union target with string", "const r: i32 | string = a64;", "", []int32{2322}},
 +		{"optional target", "const r: i64 | undefined = a32;", "", nil},
++		{"lossy optional target", "const r: i32 | undefined = a64;", "", []int32{2322}},
 +		{"switch case comparability", "switch (a32) { case a64: break; case ua64: break; }", "", []int32{2678}},
 +		{"tuple element", "const t: [string, i32] = ['a', a32];\nconst r = t[1];", "i32", nil},
 +		{"conditional with literal", "const r = c ? a32 : 1;", "1 | i32", nil},
@@ -634,6 +959,78 @@ index 0000000000..7885f4e09f
 +		{"plain object", "const r = { a: 1, b: a32, c: a32 + a64, d: n };", "{ a: number; b: i32; c: i64; d: number; }", nil},
 +		{"const tuple", "const r = [1, a32, a64] as const;", "readonly [1, i32, i64]", nil},
 +		{"nested const object", "const r = { nested: { a: 1, b: ua8 } } as const;", "{ readonly nested: { readonly a: 1; readonly b: u8; }; }", nil},
++		{"literal at u8 max", "const r: u8 = 255;", "u8", nil},
++		{"literal over u8", "const r: u8 = 256;", "u8", []int32{2322}},
++		{"negative literal to unsigned", "const r: u8 = -1;", "u8", []int32{2322}},
++		{"literal at i8 min", "const r: i8 = -128;", "i8", nil},
++		{"literal below i8", "const r: i8 = -129;", "i8", []int32{2322}},
++		{"literal at i32 max", "const r: i32 = 2147483647;", "i32", nil},
++		{"literal over i32", "const r: i32 = 2147483648;", "i32", []int32{2322}},
++		{"literal at u32 max", "const r: u32 = 4294967295;", "u32", nil},
++		{"fractional literal to integer", "const r: i32 = 1.5;", "i32", []int32{2322}},
++		{"fractional literal to f64", "const r: f64 = 1.5;", "f64", nil},
++		{"exact literal to f32", "const r: f32 = 0.5;", "f32", nil},
++		{"inexact literal to f32", "const r: f32 = 0.1;", "f32", nil},
++		{"literal argument out of range", "declare function take(v: u8): void;\ntake(300);", "", []int32{2345}},
++		{"literal return out of range", "function f(): u8 { return 300; }", "", []int32{2322}},
++		{"literal array element out of range", "const r: u8[] = [1, 300];", "u8[]", []int32{2322}},
++		{"literal union out of range", "const r: u8 = c ? 1 : 300;", "u8", []int32{2322}},
++		{"fractional literal to number is left to tsc", "const r: number = 1.5;", "number", nil},
++		{"exponent literal to integer", "const r: i32 = 1e3;", "i32", nil},
++		{"fractional exponent literal to integer", "const r: i32 = 1.5e1;", "i32", nil},
++		{"negative exponent literal to integer", "const r: i32 = 1e-3;", "i32", []int32{2322}},
++		{"hex literal at u8 max", "const r: u8 = 0xff;", "u8", nil},
++		{"hex literal over u8", "const r: u8 = 0x100;", "u8", []int32{2322}},
++		{"separated literal", "const r: i32 = 1_000_000;", "i32", nil},
++		{"literal at i64 max", "const r: i64 = 9223372036854775807;", "i64", nil},
++		{"literal over i64", "const r: i64 = 9223372036854775808;", "i64", []int32{2322}},
++		{"literal at i64 min", "const r: i64 = -9223372036854775808;", "i64", nil},
++		{"literal below i64", "const r: i64 = -9223372036854775809;", "i64", []int32{2322}},
++		{"literal at u64 max", "const r: u64 = 18446744073709551615;", "u64", nil},
++		{"literal over u64", "const r: u64 = 18446744073709551616;", "u64", []int32{2322}},
++		{"literal over f32", "const r: f32 = 1e39;", "f32", nil},
++		{"literal under f32", "const r: f32 = 1e-50;", "f32", nil},
++		{"zero literal to f32", "const r: f32 = 0.0;", "f32", nil},
++		{"literal over f64", "const r: f64 = 1e309;", "f64", nil},
++		{"literal under f64", "const r: f64 = 1e-400;", "f64", nil},
++		{"literal over number", "const r: number = 1e309;", "number", nil},
++		{"literal in optional ssc target", "const r: u8 | undefined = 300;", "", []int32{2322}},
++		{"hex literal at u64 max", "const r: u64 = 0xffffffffffffffff;", "u64", nil},
++		{"hex literal over u64", "const r: u64 = 0x1_0000_0000_0000_0000;", "u64", []int32{2322}},
++		{"binary literal at u8 max", "const r: u8 = 0b1111_1111;", "u8", nil},
++		{"binary literal over u8", "const r: u8 = 0b1_0000_0000;", "u8", []int32{2322}},
++		{"octal literal at u8 max", "const r: u8 = 0o377;", "u8", nil},
++		{"octal literal over u8", "const r: u8 = 0o400;", "u8", []int32{2322}},
++		{"separated literal at i64 min", "const r: i64 = -9_223_372_036_854_775_808;", "i64", nil},
++		{"negative zero to unsigned", "const r: u8 = -0;", "u8", nil},
++		{"plus literal at u8 max", "const r: u8 = +255;", "u8", nil},
++		{"plus literal over u8", "const r: u8 = +300;", "u8", []int32{2322}},
++		{"negated parenthesized literal is f64", "const r: i8 = -(128);", "i8", []int32{2322}},
++		{"integer valued fraction", "const r: u8 = 255.0;", "u8", nil},
++		{"integer valued exponent", "const r: u8 = 2.55e2;", "u8", nil},
++		{"large literal through a variable", "const a = 9223372036854775807;\nconst r: i64 = a;", "i64", nil},
++		{"large literal over i64 through a variable", "const a = 9223372036854775808;\nconst r: i64 = a;", "i64", []int32{2322}},
++		{"same large literals", "const r = 9223372036854775807 === 9223372036854775807;", "boolean", nil},
++		{"large literals rounding to the same float", "const r = 9223372036854775807 === 9223372036854775806;", "boolean", []int32{2367}},
++		{"literal over range in object", "const r: { v: u8 } = { v: 300 };", "", []int32{2322}},
++		{"literal over range in tuple", "const r: [i32, u8] = [1, 300];", "", []int32{2322}},
++		{"literal over range as default parameter", "function f(v: u8 = 300) { return v; }", "", []int32{2322}},
++		{"literal at u64 max as return", "function f(): u64 { return 18446744073709551615; }", "", nil},
++		{"literal over range to optional parameter", "declare function f(v?: u8): void;\nf(300);", "", []int32{2345}},
++		{"literal over range to generic constraint", "declare function g<T extends u8>(v: T): T;\nconst r = g(300);", "", []int32{2345}},
++		{"overload skips a literal over range", "declare function f(v: u8): u8;\ndeclare function f(v: u16): u16;\nconst r = f(300);", "u16", nil},
++		{"overload takes a literal in range", "declare function f(v: u8): u8;\ndeclare function f(v: u16): u16;\nconst r = f(255);", "u8", nil},
++		{"overload with a literal operand over range", "declare function f(p: u8, q: u8): u8;\ndeclare function f(p: u16, q: u16): u16;\nconst r = f(ua8, 300);", "u16", nil},
++		{"overload without a literal in range", "declare function f(v: u8): u8;\ndeclare function f(v: i8): i8;\nconst r = f(300);", "", []int32{2769}},
++		{"returns keep a literal over range", "function f() { if (c) { return ua8; } return 300; }\nconst r = f();", "300 | u8", nil},
++		{"huge literal without context", "const r = 1e1000;", "", nil},
++		{"tiny literal without context", "const r = 1e-1000;", "", nil},
++		{"negative huge literal without context", "const r = -1e1000;", "", nil},
++		{"plus huge literal without context", "const r = +1e1000;", "", nil},
++		{"huge literal in integer context", "const r: u64 = 1e400;", "u64", []int32{2322}},
++		{"huge exponent literal in integer context", "const r: u64 = 1e1000;", "u64", []int32{2322}},
++		{"tiny exponent literal in integer context is 0", "const r: i32 = 1e-1000;", "i32", nil},
++		{"long mantissa with large negative exponent", "const r = 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e-800;", "", nil},
 +		{"never assignment", "declare const nv: never;\nconst r: i32 = nv;", "i32", nil},
 +		{"any assignment is left to tsc", "const r: i32 = x;", "i32", nil},
 +	}
@@ -647,6 +1044,22 @@ index 0000000000..7885f4e09f
 +			assert.DeepEqual(t, result.codes, tc.codes)
 +		})
 +	}
++}
++
++func TestSscLargeLiteralSuggestion(t *testing.T) {
++	t.Parallel()
++	t.Run("suppressed in ssc mode", func(t *testing.T) {
++		t.Parallel()
++		result := ssc_checkSource(t, "const r: u64 = 18446744073709551615;")
++		assert.Assert(t, !slices.Contains(result.suggestionCodes, 80008))
++	})
++	t.Run("reported without prelude", func(t *testing.T) {
++		t.Parallel()
++		result := ssc_check(t, map[string]string{
++			"/main.ts": "const r = 18446744073709551615;\nexport {};\n",
++		}, []string{"main.ts"})
++		assert.Assert(t, slices.Contains(result.suggestionCodes, 80008))
++	})
 +}
 +
 +func TestSscPreludeIdentification(t *testing.T) {
@@ -667,6 +1080,32 @@ index 0000000000..7885f4e09f
 +		}, []string{"node_modules/other/prelude.d.ts", "main.ts"})
 +		assert.Equal(t, result.resultType, "number")
 +		assert.DeepEqual(t, result.codes, []int32(nil))
++	})
++	t.Run("partial prelude disables ssc mode", func(t *testing.T) {
++		t.Parallel()
++		cases := []struct {
++			name       string
++			source     string
++			resultType string
++		}{
++			{"lossy assignment", "declare const q: i64;\nconst r: i32 = q;", "i32"},
++			{"unary plus", "declare const p: i32;\nconst r = +p;", "number"},
++			{"literal in ssc context", "const o = { v: 1 } satisfies { v: i32 };\nconst r = o.v;", "number"},
++			{"huge literal", "const r = 1e1000;", "Infinity"},
++			{"literal over i64", "const r: i64 = 9223372036854775808;", "i64"},
++		}
++		for _, tc := range cases {
++			t.Run(tc.name, func(t *testing.T) {
++				t.Parallel()
++				result := ssc_check(t, map[string]string{
++					"/node_modules/syscript/package.json": `{ "name": "syscript", "version": "0.0.0" }`,
++					"/node_modules/syscript/prelude.d.ts": strings.Replace(ssc_prelude, "  type f32 = number & {};\n", "", 1),
++					"/main.ts":                            tc.source + "\nexport {};\n",
++				}, []string{"node_modules/syscript/prelude.d.ts", "main.ts"})
++				assert.Equal(t, result.resultType, tc.resultType)
++				assert.DeepEqual(t, result.codes, []int32(nil))
++			})
++		}
 +	})
 +	t.Run("prelude outside the syscript package", func(t *testing.T) {
 +		t.Parallel()

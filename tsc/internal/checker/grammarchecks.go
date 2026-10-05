@@ -2081,6 +2081,10 @@ func (c *Checker) checkGrammarNumericLiteral(node *ast.NumericLiteral) {
 		return
 	}
 
+	if c.ssc_IsEnabled() { // syscript
+		return
+	}
+
 	c.addErrorOrSuggestion(false, createDiagnosticForNode(node.AsNode(), diagnostics.Numeric_literals_with_absolute_values_equal_to_2_53_or_greater_are_too_large_to_be_represented_accurately_as_integers))
 }
 
