@@ -20,7 +20,7 @@ var ssc_unsignedTypes = []string{"u8", "u16", "u32", "u64"}
 
 var ssc_floatTypes = []string{"f32", "f64"}
 
-var ssc_types = slices.Concat(ssc_signedTypes, ssc_unsignedTypes, ssc_floatTypes)
+var ssc_types = slices.Concat(ssc_signedTypes, ssc_unsignedTypes, ssc_floatTypes, []string{"char"})
 
 var ssc_bitwiseOperators = []ast.Kind{
 	ast.KindAmpersandEqualsToken,
@@ -39,16 +39,17 @@ var ssc_bitwiseOperators = []ast.Kind{
 }
 
 var ssc_losslessTargets = map[string][]string{
-	"i8":  {"i8", "i16", "i32", "i64", "f32", "f64"},
-	"i16": {"i16", "i32", "i64", "f32", "f64"},
-	"i32": {"i32", "i64", "f64"},
-	"i64": {"i64"},
-	"u8":  {"u8", "u16", "u32", "u64", "i16", "i32", "i64", "f32", "f64"},
-	"u16": {"u16", "u32", "u64", "i32", "i64", "f32", "f64"},
-	"u32": {"u32", "u64", "i64", "f64"},
-	"u64": {"u64"},
-	"f32": {"f32", "f64"},
-	"f64": {"f64"},
+	"i8":   {"i8", "i16", "i32", "i64", "f32", "f64"},
+	"i16":  {"i16", "i32", "i64", "f32", "f64"},
+	"i32":  {"i32", "i64", "f64"},
+	"i64":  {"i64"},
+	"u8":   {"u8", "u16", "u32", "u64", "i16", "i32", "i64", "f32", "f64"},
+	"u16":  {"u16", "u32", "u64", "i32", "i64", "f32", "f64"},
+	"u32":  {"u32", "u64", "i64", "f64"},
+	"u64":  {"u64"},
+	"f32":  {"f32", "f64"},
+	"f64":  {"f64"},
+	"char": {"char", "u32", "u64", "i64", "f64"},
 }
 
 func (c *Checker) ssc_loadPrelude() (symbolByBrand map[*ast.Symbol]*ast.Symbol, symbolByName map[string]*ast.Symbol) {
@@ -197,9 +198,11 @@ func (c *Checker) ssc_UnaryResultTypeOrReportError(operandType *Type, operator a
 	if !isSsc {
 		return nil
 	}
-	if operator == ast.KindPlusToken {
+	_, symbolByName := c.ssc_loadPrelude()
+	if (operator == ast.KindPlusPlusToken || operator == ast.KindMinusMinusToken) && c.ssc_symbol(operandType) == symbolByName["char"] {
 		result = nil
-		_, symbolByName := c.ssc_loadPrelude()
+	} else if operator == ast.KindPlusToken {
+		result = nil
 		if f64Symbol := symbolByName["f64"]; f64Symbol != nil {
 			_, result = c.ssc_CommonType(operandType, c.getDeclaredTypeOfSymbol(f64Symbol))
 		}

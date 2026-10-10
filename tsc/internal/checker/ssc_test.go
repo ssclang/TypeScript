@@ -31,6 +31,7 @@ declare global {
   type u64 = number & { readonly [ssc]: 'u64' };
   type f32 = number & { readonly [ssc]: 'f32' };
   type f64 = number & { readonly [ssc]: 'f64' };
+  type char = number & { readonly [ssc]: 'char' };
   interface Array<T> { length: u64; [n: number]: T; [n: i64]: T; [n: u64]: T }
   interface Boolean {}
   interface CallableFunction {}
@@ -62,6 +63,8 @@ declare let ua32: u32;
 declare let ua64: u64;
 declare let fa32: f32;
 declare let fa64: f64;
+declare let ch: char;
+declare let ch2: char;
 `
 
 type ssc_result struct {
@@ -584,6 +587,47 @@ func TestSscHookCoverage(t *testing.T) {
 			if tc.messages != nil {
 				assert.DeepEqual(t, result.messages, tc.messages)
 			}
+		})
+	}
+}
+
+func TestSscChar(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		source     string
+		resultType string
+		codes      []int32
+	}{
+		{"widens to u32", "const r: u32 = ch;", "u32", nil},
+		{"widens to u64", "const r: u64 = ch;", "u64", nil},
+		{"widens to i64", "const r: i64 = ch;", "i64", nil},
+		{"widens to f64", "const r: f64 = ch;", "f64", nil},
+		{"widens to number", "const r: number = ch;", "number", nil},
+		{"does not narrow to u16", "const r: u16 = ch;", "u16", []int32{2322}},
+		{"does not narrow to i32", "const r: i32 = ch;", "i32", []int32{2322}},
+		{"u32 is not a char", "const r: char = ua32;", "char", []int32{2322}},
+		{"number literal is not a char", "const r: char = 65;", "char", []int32{2322}},
+		{"arithmetic computes as u32", "const r = ch + 1;", "u32", nil},
+		{"arithmetic of two chars computes as u32", "const r = ch + ch2;", "u32", nil},
+		{"arithmetic with a wider integer", "const r = ch + ua64;", "u64", nil},
+		{"negation computes as i64", "const r = -ch;", "i64", nil},
+		{"bitwise computes as u32", "const r = ~ch;", "u32", nil},
+		{"comparison between chars", "const r = ch === ch2;", "boolean", nil},
+		{"comparison with an integer", "const r = ch < ua32;", "boolean", nil},
+		{"conditional keeps char", "const r = c ? ch : ch2;", "char", nil},
+		{"compound assignment does not produce a char", "ch += 1;\nconst r = 0;", "", []int32{2322}},
+		{"increment does not produce a char", "ch++;\nconst r = 0;", "", []int32{2736}},
+		{"decrement does not produce a char", "--ch;\nconst r = 0;", "", []int32{2736}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := ssc_checkSource(t, tc.source)
+			if tc.resultType != "" {
+				assert.Equal(t, result.resultType, tc.resultType)
+			}
+			assert.DeepEqual(t, result.codes, tc.codes)
 		})
 	}
 }
