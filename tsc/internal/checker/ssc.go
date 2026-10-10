@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/microsoft/TypeScript/tsc/internal/ast"
 	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
@@ -135,6 +136,7 @@ func (c *Checker) ssc_CommonType(types ...*Type) (isSsc bool, commonType *Type) 
 	}
 	var symbols []*ast.Symbol
 	var literals []*Type
+	hasCharLiteral := false
 	for t := range slices.Values(types) {
 		memberTypes := []*Type{t}
 		if t.flags&TypeFlagsUnion != 0 {
@@ -145,6 +147,10 @@ func (c *Checker) ssc_CommonType(types ...*Type) (isSsc bool, commonType *Type) 
 				literals = append(literals, memberType)
 				continue
 			}
+			if c.ssc_isCharLiteral(memberType) {
+				hasCharLiteral = true
+				continue
+			}
 			symbol := c.ssc_symbol(memberType)
 			if symbol == nil {
 				return false, nil
@@ -152,7 +158,7 @@ func (c *Checker) ssc_CommonType(types ...*Type) (isSsc bool, commonType *Type) 
 			symbols = append(symbols, symbol)
 		}
 	}
-	if len(symbols) == 0 {
+	if len(symbols) == 0 || hasCharLiteral && !slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return symbol.Name() == "char" }) {
 		return false, nil
 	}
 	isFloat := slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return slices.Contains(ssc_floatTypes, symbol.Name()) }) ||
@@ -256,7 +262,7 @@ func (c *Checker) ssc_Related(source *Type, target *Type, relation *Relation) (i
 	}
 	sourceSymbol := c.ssc_symbol(source)
 	targetSymbol := c.ssc_symbol(target)
-	if (relation == c.assignableRelation || relation == c.subtypeRelation || relation == c.strictSubtypeRelation) && targetSymbol != nil && source.flags&TypeFlagsNumberLiteral != 0 {
+	if (relation == c.assignableRelation || relation == c.subtypeRelation || relation == c.strictSubtypeRelation) && targetSymbol != nil && source.flags&(TypeFlagsNumberLiteral|TypeFlagsStringLiteral) != 0 {
 		return true, c.ssc_isLiteralInRange(source, targetSymbol.Name())
 	}
 	if relation == c.comparableRelation && (sourceSymbol != nil || targetSymbol != nil) {
@@ -289,11 +295,11 @@ func (r *Relater) ssc_RelatedOrReportError(originalSource *Type, originalTarget 
 		return true, TernaryTrue
 	}
 	if reportErrors {
-		if source.flags&TypeFlagsNumberLiteral != 0 && r.relation == r.c.assignableRelation {
+		if source.flags&(TypeFlagsNumberLiteral|TypeFlagsStringLiteral) != 0 && r.relation == r.c.assignableRelation {
 			message := cmp.Or(headMessage, diagnostics.Type_0_is_not_assignable_to_type_1)
 			sourceType, targetType := r.c.getTypeNamesForErrorDisplay(originalSource, originalTarget)
 			r.reportError(message, sourceType, targetType)
-		} else if source.flags&TypeFlagsNumberLiteral != 0 && r.relation == r.c.comparableRelation {
+		} else if source.flags&(TypeFlagsNumberLiteral|TypeFlagsStringLiteral) != 0 && r.relation == r.c.comparableRelation {
 			message := cmp.Or(headMessage, diagnostics.Type_0_is_not_comparable_to_type_1)
 			sourceType, targetType := r.c.getTypeNamesForErrorDisplay(originalSource, originalTarget)
 			r.reportError(message, sourceType, targetType)
@@ -308,7 +314,15 @@ func (c *Checker) ssc_IsLiteralOfContextualType(candidateType *Type, contextualT
 	if !c.ssc_IsEnabled() || contextualType.flags&TypeFlagsNumber != 0 || c.ssc_symbol(contextualType) == nil {
 		return false, false
 	}
-	return true, c.maybeTypeOfKind(candidateType, TypeFlagsNumberLiteral)
+	return true, c.maybeTypeOfKind(candidateType, TypeFlagsNumberLiteral|TypeFlagsStringLiteral)
+}
+
+func (c *Checker) ssc_isCharLiteral(t *Type) bool {
+	if t.flags&TypeFlagsStringLiteral == 0 {
+		return false
+	}
+	value := t.AsLiteralType().value.(string)
+	return utf8.ValidString(value) && utf8.RuneCountInString(value) == 1
 }
 
 var ssc_integerRanges = map[string]struct{ min, max *big.Int }{
@@ -391,6 +405,9 @@ func (c *Checker) ssc_literalInteger(t *Type) (isInteger bool, value *big.Int) {
 }
 
 func (c *Checker) ssc_isLiteralInRange(literal *Type, name string) bool {
+	if literal.flags&TypeFlagsStringLiteral != 0 {
+		return name == "char" && c.ssc_isCharLiteral(literal)
+	}
 	if slices.Contains(ssc_floatTypes, name) {
 		return true
 	}
@@ -409,5 +426,5 @@ func (c *Checker) ssc_IsLiteralAgainstSscType(literal *Type, other *Type) bool {
 	if !c.ssc_IsEnabled() || c.ssc_symbol(other) == nil {
 		return false
 	}
-	return everyType(literal, func(t *Type) bool { return t.flags&TypeFlagsNumberLiteral != 0 })
+	return everyType(literal, func(t *Type) bool { return t.flags&TypeFlagsNumberLiteral != 0 }) || everyType(literal, func(t *Type) bool { return t.flags&TypeFlagsStringLiteral != 0 })
 }

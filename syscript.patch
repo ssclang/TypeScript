@@ -225,10 +225,10 @@ index a9bc484fef..e1155044aa 100644
  	if r.relation == r.c.comparableRelation && target.flags&TypeFlagsNever == 0 && r.c.isSimpleTypeRelatedTo(target, source, r.relation, nil) ||
 diff --git a/tsc/internal/checker/ssc.go b/tsc/internal/checker/ssc.go
 new file mode 100644
-index 0000000000..a50c918f5f
+index 0000000000..0de0c8e6d1
 --- /dev/null
 +++ b/tsc/internal/checker/ssc.go
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,430 @@
 +package checker
 +
 +import (
@@ -238,6 +238,7 @@ index 0000000000..a50c918f5f
 +	"math/big"
 +	"slices"
 +	"strings"
++	"unicode/utf8"
 +
 +	"github.com/microsoft/TypeScript/tsc/internal/ast"
 +	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
@@ -366,6 +367,7 @@ index 0000000000..a50c918f5f
 +	}
 +	var symbols []*ast.Symbol
 +	var literals []*Type
++	hasCharLiteral := false
 +	for t := range slices.Values(types) {
 +		memberTypes := []*Type{t}
 +		if t.flags&TypeFlagsUnion != 0 {
@@ -376,6 +378,10 @@ index 0000000000..a50c918f5f
 +				literals = append(literals, memberType)
 +				continue
 +			}
++			if c.ssc_isCharLiteral(memberType) {
++				hasCharLiteral = true
++				continue
++			}
 +			symbol := c.ssc_symbol(memberType)
 +			if symbol == nil {
 +				return false, nil
@@ -383,7 +389,7 @@ index 0000000000..a50c918f5f
 +			symbols = append(symbols, symbol)
 +		}
 +	}
-+	if len(symbols) == 0 {
++	if len(symbols) == 0 || hasCharLiteral && !slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return symbol.Name() == "char" }) {
 +		return false, nil
 +	}
 +	isFloat := slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return slices.Contains(ssc_floatTypes, symbol.Name()) }) ||
@@ -487,7 +493,7 @@ index 0000000000..a50c918f5f
 +	}
 +	sourceSymbol := c.ssc_symbol(source)
 +	targetSymbol := c.ssc_symbol(target)
-+	if (relation == c.assignableRelation || relation == c.subtypeRelation || relation == c.strictSubtypeRelation) && targetSymbol != nil && source.flags&TypeFlagsNumberLiteral != 0 {
++	if (relation == c.assignableRelation || relation == c.subtypeRelation || relation == c.strictSubtypeRelation) && targetSymbol != nil && source.flags&(TypeFlagsNumberLiteral|TypeFlagsStringLiteral) != 0 {
 +		return true, c.ssc_isLiteralInRange(source, targetSymbol.Name())
 +	}
 +	if relation == c.comparableRelation && (sourceSymbol != nil || targetSymbol != nil) {
@@ -520,11 +526,11 @@ index 0000000000..a50c918f5f
 +		return true, TernaryTrue
 +	}
 +	if reportErrors {
-+		if source.flags&TypeFlagsNumberLiteral != 0 && r.relation == r.c.assignableRelation {
++		if source.flags&(TypeFlagsNumberLiteral|TypeFlagsStringLiteral) != 0 && r.relation == r.c.assignableRelation {
 +			message := cmp.Or(headMessage, diagnostics.Type_0_is_not_assignable_to_type_1)
 +			sourceType, targetType := r.c.getTypeNamesForErrorDisplay(originalSource, originalTarget)
 +			r.reportError(message, sourceType, targetType)
-+		} else if source.flags&TypeFlagsNumberLiteral != 0 && r.relation == r.c.comparableRelation {
++		} else if source.flags&(TypeFlagsNumberLiteral|TypeFlagsStringLiteral) != 0 && r.relation == r.c.comparableRelation {
 +			message := cmp.Or(headMessage, diagnostics.Type_0_is_not_comparable_to_type_1)
 +			sourceType, targetType := r.c.getTypeNamesForErrorDisplay(originalSource, originalTarget)
 +			r.reportError(message, sourceType, targetType)
@@ -539,7 +545,15 @@ index 0000000000..a50c918f5f
 +	if !c.ssc_IsEnabled() || contextualType.flags&TypeFlagsNumber != 0 || c.ssc_symbol(contextualType) == nil {
 +		return false, false
 +	}
-+	return true, c.maybeTypeOfKind(candidateType, TypeFlagsNumberLiteral)
++	return true, c.maybeTypeOfKind(candidateType, TypeFlagsNumberLiteral|TypeFlagsStringLiteral)
++}
++
++func (c *Checker) ssc_isCharLiteral(t *Type) bool {
++	if t.flags&TypeFlagsStringLiteral == 0 {
++		return false
++	}
++	value := t.AsLiteralType().value.(string)
++	return utf8.ValidString(value) && utf8.RuneCountInString(value) == 1
 +}
 +
 +var ssc_integerRanges = map[string]struct{ min, max *big.Int }{
@@ -622,6 +636,9 @@ index 0000000000..a50c918f5f
 +}
 +
 +func (c *Checker) ssc_isLiteralInRange(literal *Type, name string) bool {
++	if literal.flags&TypeFlagsStringLiteral != 0 {
++		return name == "char" && c.ssc_isCharLiteral(literal)
++	}
 +	if slices.Contains(ssc_floatTypes, name) {
 +		return true
 +	}
@@ -640,14 +657,14 @@ index 0000000000..a50c918f5f
 +	if !c.ssc_IsEnabled() || c.ssc_symbol(other) == nil {
 +		return false
 +	}
-+	return everyType(literal, func(t *Type) bool { return t.flags&TypeFlagsNumberLiteral != 0 })
++	return everyType(literal, func(t *Type) bool { return t.flags&TypeFlagsNumberLiteral != 0 }) || everyType(literal, func(t *Type) bool { return t.flags&TypeFlagsStringLiteral != 0 })
 +}
 diff --git a/tsc/internal/checker/ssc_test.go b/tsc/internal/checker/ssc_test.go
 new file mode 100644
-index 0000000000..26b4c3cad3
+index 0000000000..84ef2243c3
 --- /dev/null
 +++ b/tsc/internal/checker/ssc_test.go
-@@ -0,0 +1,633 @@
+@@ -0,0 +1,685 @@
 +package checker_test
 +
 +import (
@@ -1224,6 +1241,10 @@ index 0000000000..26b4c3cad3
 +		{"number target takes a large literal", "const r: number = 18446744073709551615;", "number", nil, nil},
 +		{"comparison with number uses f64", "const r = a32 === n;", "boolean", nil, nil},
 +		{"comparison with number rejects a lossy integer", "const r = ua64 === n;", "boolean", []int32{2367}, nil},
++		{"char assignment error shows the literal", "const r: char = 'AB';", "char", []int32{2322}, []string{"Type '\"AB\"' is not assignable to type 'char'."}},
++		{"char lone surrogate error shows the literal", "const r: char = '\\uD800';", "char", []int32{2322}, []string{"Type '\"\\uD800\"' is not assignable to type 'char'."}},
++		{"char argument error shows the literal", "declare function f(v: char): void;\nf('AB');\nconst r = 0;", "", []int32{2345}, []string{"Argument of type '\"AB\"' is not assignable to parameter of type 'char'."}},
++		{"char comparison error shows the literal", "const r = ch === 'AB';", "boolean", []int32{2367}, []string{"This comparison appears to be unintentional because the types 'char' and '\"AB\"' have no overlap."}},
 +		{"lossy assignment message names both types", "const r: i32 = a64;", "i32", []int32{2322}, []string{"Type 'i64' is not assignable to type 'i32'."}},
 +	}
 +	for _, tc := range cases {
@@ -1269,6 +1290,54 @@ index 0000000000..26b4c3cad3
 +		{"compound assignment does not produce a char", "ch += 1;\nconst r = 0;", "", []int32{2322}},
 +		{"increment does not produce a char", "ch++;\nconst r = 0;", "", []int32{2736}},
 +		{"decrement does not produce a char", "--ch;\nconst r = 0;", "", []int32{2736}},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Parallel()
++			result := ssc_checkSource(t, tc.source)
++			if tc.resultType != "" {
++				assert.Equal(t, result.resultType, tc.resultType)
++			}
++			assert.DeepEqual(t, result.codes, tc.codes)
++		})
++	}
++}
++
++func TestSscCharLiteral(t *testing.T) {
++	t.Parallel()
++	cases := []struct {
++		name       string
++		source     string
++		resultType string
++		codes      []int32
++	}{
++		{"ascii literal", "const r: char = 'A';", "char", nil},
++		{"three byte literal", "const r: char = '한';", "char", nil},
++		{"four byte literal", "const r: char = '👍';", "char", nil},
++		{"code point escape", "const r: char = '\\u{1F44D}';", "char", nil},
++		{"surrogate pair escape", "const r: char = '\\uD83D\\uDC4D';", "char", nil},
++		{"literal in a let", "let r: char = 'A';", "char", nil},
++		{"literal as an argument", "declare function f(v: char): void;\nf('A');\nconst r = 0;", "", nil},
++		{"literal to an optional target", "const r: char | undefined = 'A';", "", nil},
++		{"two code points", "const r: char = 'AB';", "char", []int32{2322}},
++		{"empty literal", "const r: char = '';", "char", []int32{2322}},
++		{"grapheme of two code points", "const r: char = '👍🏽';", "char", []int32{2322}},
++		{"lone surrogate", "const r: char = '\\uD800';", "char", []int32{2322}},
++		{"two code points as an argument", "declare function f(v: char): void;\nf('AB');\nconst r = 0;", "", []int32{2345}},
++		{"string is not a char", "declare const s: string;\nconst r: char = s;", "char", []int32{2322}},
++		{"equality with a literal", "const r = ch === 'A';", "boolean", nil},
++		{"literal on the left", "const r = 'A' === ch;", "boolean", nil},
++		{"ordering with a literal", "const r = ch < 'Z';", "boolean", nil},
++		{"switch case literal", "switch (ch) {\n  case 'A':\n    break;\n}\nconst r = 0;", "", nil},
++		{"equality with two code points", "const r = ch === 'AB';", "boolean", []int32{2367}},
++		{"ordering with two code points", "const r = ch < 'AB';", "", []int32{2365}},
++		{"arithmetic with a literal", "const r = ch - 'A';", "", []int32{2363}},
++		{"literal without a char is not a number", "const r = 'A' * 2;", "", []int32{2362}},
++		{"concatenation stays a string", "const r = ch + 'A';", "string", nil},
++		{"assertion of a char literal", "const r = 'A' as char;", "char", nil},
++		{"assertion of two code points", "const r = 'AB' as char;", "char", []int32{2352}},
++		{"assertion of a literal to a number type", "const r = 'A' as u8;", "u8", []int32{2352}},
++		{"comparison of a literal with a number type", "const r = ua8 === 'A';", "boolean", []int32{2367}},
 +	}
 +	for _, tc := range cases {
 +		t.Run(tc.name, func(t *testing.T) {

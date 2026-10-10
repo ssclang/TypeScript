@@ -574,6 +574,10 @@ func TestSscHookCoverage(t *testing.T) {
 		{"number target takes a large literal", "const r: number = 18446744073709551615;", "number", nil, nil},
 		{"comparison with number uses f64", "const r = a32 === n;", "boolean", nil, nil},
 		{"comparison with number rejects a lossy integer", "const r = ua64 === n;", "boolean", []int32{2367}, nil},
+		{"char assignment error shows the literal", "const r: char = 'AB';", "char", []int32{2322}, []string{"Type '\"AB\"' is not assignable to type 'char'."}},
+		{"char lone surrogate error shows the literal", "const r: char = '\\uD800';", "char", []int32{2322}, []string{"Type '\"\\uD800\"' is not assignable to type 'char'."}},
+		{"char argument error shows the literal", "declare function f(v: char): void;\nf('AB');\nconst r = 0;", "", []int32{2345}, []string{"Argument of type '\"AB\"' is not assignable to parameter of type 'char'."}},
+		{"char comparison error shows the literal", "const r = ch === 'AB';", "boolean", []int32{2367}, []string{"This comparison appears to be unintentional because the types 'char' and '\"AB\"' have no overlap."}},
 		{"lossy assignment message names both types", "const r: i32 = a64;", "i32", []int32{2322}, []string{"Type 'i64' is not assignable to type 'i32'."}},
 	}
 	for _, tc := range cases {
@@ -619,6 +623,54 @@ func TestSscChar(t *testing.T) {
 		{"compound assignment does not produce a char", "ch += 1;\nconst r = 0;", "", []int32{2322}},
 		{"increment does not produce a char", "ch++;\nconst r = 0;", "", []int32{2736}},
 		{"decrement does not produce a char", "--ch;\nconst r = 0;", "", []int32{2736}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := ssc_checkSource(t, tc.source)
+			if tc.resultType != "" {
+				assert.Equal(t, result.resultType, tc.resultType)
+			}
+			assert.DeepEqual(t, result.codes, tc.codes)
+		})
+	}
+}
+
+func TestSscCharLiteral(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		source     string
+		resultType string
+		codes      []int32
+	}{
+		{"ascii literal", "const r: char = 'A';", "char", nil},
+		{"three byte literal", "const r: char = '한';", "char", nil},
+		{"four byte literal", "const r: char = '👍';", "char", nil},
+		{"code point escape", "const r: char = '\\u{1F44D}';", "char", nil},
+		{"surrogate pair escape", "const r: char = '\\uD83D\\uDC4D';", "char", nil},
+		{"literal in a let", "let r: char = 'A';", "char", nil},
+		{"literal as an argument", "declare function f(v: char): void;\nf('A');\nconst r = 0;", "", nil},
+		{"literal to an optional target", "const r: char | undefined = 'A';", "", nil},
+		{"two code points", "const r: char = 'AB';", "char", []int32{2322}},
+		{"empty literal", "const r: char = '';", "char", []int32{2322}},
+		{"grapheme of two code points", "const r: char = '👍🏽';", "char", []int32{2322}},
+		{"lone surrogate", "const r: char = '\\uD800';", "char", []int32{2322}},
+		{"two code points as an argument", "declare function f(v: char): void;\nf('AB');\nconst r = 0;", "", []int32{2345}},
+		{"string is not a char", "declare const s: string;\nconst r: char = s;", "char", []int32{2322}},
+		{"equality with a literal", "const r = ch === 'A';", "boolean", nil},
+		{"literal on the left", "const r = 'A' === ch;", "boolean", nil},
+		{"ordering with a literal", "const r = ch < 'Z';", "boolean", nil},
+		{"switch case literal", "switch (ch) {\n  case 'A':\n    break;\n}\nconst r = 0;", "", nil},
+		{"equality with two code points", "const r = ch === 'AB';", "boolean", []int32{2367}},
+		{"ordering with two code points", "const r = ch < 'AB';", "", []int32{2365}},
+		{"arithmetic with a literal", "const r = ch - 'A';", "", []int32{2363}},
+		{"literal without a char is not a number", "const r = 'A' * 2;", "", []int32{2362}},
+		{"concatenation stays a string", "const r = ch + 'A';", "string", nil},
+		{"assertion of a char literal", "const r = 'A' as char;", "char", nil},
+		{"assertion of two code points", "const r = 'AB' as char;", "char", []int32{2352}},
+		{"assertion of a literal to a number type", "const r = 'A' as u8;", "u8", []int32{2352}},
+		{"comparison of a literal with a number type", "const r = ua8 === 'A';", "boolean", []int32{2367}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
