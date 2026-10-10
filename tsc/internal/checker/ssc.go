@@ -2,6 +2,7 @@ package checker
 
 import (
 	"cmp"
+	"fmt"
 	"math"
 	"math/big"
 	"slices"
@@ -50,11 +51,11 @@ var ssc_losslessTargets = map[string][]string{
 	"f64": {"f64"},
 }
 
-func (c *Checker) ssc_loadPrelude() (symbolSet map[*ast.Symbol]bool, symbolByName map[string]*ast.Symbol) {
-	if c.ssc_PreludeSymbolSet != nil {
-		return c.ssc_PreludeSymbolSet, c.ssc_PreludeSymbolByName
+func (c *Checker) ssc_loadPrelude() (symbolByBrand map[*ast.Symbol]*ast.Symbol, symbolByName map[string]*ast.Symbol) {
+	if c.ssc_PreludeSymbolByBrand != nil {
+		return c.ssc_PreludeSymbolByBrand, c.ssc_PreludeSymbolByName
 	}
-	symbolSet = map[*ast.Symbol]bool{}
+	symbolByBrand = map[*ast.Symbol]*ast.Symbol{}
 	symbolByName = map[string]*ast.Symbol{}
 	for name := range slices.Values(ssc_types) {
 		symbol := c.getGlobalSymbol(name, ast.SymbolFlagsTypeAlias, nil)
@@ -78,23 +79,46 @@ func (c *Checker) ssc_loadPrelude() (symbolSet map[*ast.Symbol]bool, symbolByNam
 			continue
 		}
 		if packageName, ok := packageJson.Name.GetValue(); ok && packageName == "syscript" {
-			symbolSet[symbol] = true
+			brand := ssc_getSscBrandTypeLiteral(declaration, name)
+			if brand == nil {
+				continue
+			}
+			symbolByBrand[brand.Symbol()] = symbol
 			symbolByName[name] = symbol
 		}
 	}
-	c.ssc_PreludeSymbolSet = symbolSet
+	c.ssc_PreludeSymbolByBrand = symbolByBrand
 	c.ssc_PreludeSymbolByName = symbolByName
 	c.ssc_Enabled = len(symbolByName) == len(ssc_types)
-	return symbolSet, symbolByName
+	return symbolByBrand, symbolByName
+}
+
+func ssc_getSscBrandTypeLiteral(declaration *ast.Node, expectedName string) *ast.Node {
+	typeNode := declaration.Type()
+	if !ast.IsIntersectionTypeNode(typeNode) {
+		return nil
+	}
+	expectedProperty := fmt.Sprintf("readonly [ssc]: '%s'", expectedName)
+	for memberTypeNode := range slices.Values(typeNode.AsIntersectionTypeNode().Types.Nodes) {
+		if ast.IsTypeLiteralNode(memberTypeNode) && strings.Contains(scanner.GetTextOfNode(memberTypeNode), expectedProperty) {
+			return memberTypeNode
+		}
+	}
+	return nil
 }
 
 func (c *Checker) ssc_symbol(t *Type) *ast.Symbol {
-	symbolSet, symbolByName := c.ssc_loadPrelude()
+	symbolByBrand, symbolByName := c.ssc_loadPrelude()
 	if t.flags&TypeFlagsNumber != 0 {
 		return symbolByName["f64"]
 	}
-	if symbol := t.alias.Symbol(); symbolSet[symbol] {
-		return symbol
+	if t.flags&TypeFlagsIntersection == 0 {
+		return nil
+	}
+	for memberType := range slices.Values(t.Types()) {
+		if symbol := symbolByBrand[memberType.symbol]; symbol != nil {
+			return symbol
+		}
 	}
 	return nil
 }

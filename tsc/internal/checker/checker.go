@@ -911,11 +911,11 @@ type Checker struct {
 	mu     sync.Mutex
 	tracer *Tracer // Optional tracer for trace events and type recording (for --generateTrace)
 
-	ssc_PreludeSymbolSet    map[*ast.Symbol]bool   // syscript
-	ssc_PreludeSymbolByName map[string]*ast.Symbol // syscript
-	ssc_Enabled             bool                   // syscript
-	ssc_LiteralTypeByValue  map[string]*Type       // syscript
-	ssc_LiteralValueByType  map[*Type]*big.Int     // syscript
+	ssc_PreludeSymbolByBrand map[*ast.Symbol]*ast.Symbol // syscript
+	ssc_PreludeSymbolByName  map[string]*ast.Symbol      // syscript
+	ssc_LiteralTypeByValue   map[string]*Type            // syscript
+	ssc_LiteralValueByType   map[*Type]*big.Int          // syscript
+	ssc_Enabled              bool                        // syscript
 }
 
 func NewChecker(program Program, tracer *Tracer) (*Checker, *sync.Mutex) {

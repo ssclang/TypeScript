@@ -10,6 +10,8 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/bundled"
 	"github.com/microsoft/TypeScript/tsc/internal/compiler"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
+	"github.com/microsoft/TypeScript/tsc/internal/diagnosticwriter"
+	"github.com/microsoft/TypeScript/tsc/internal/locale"
 	"github.com/microsoft/TypeScript/tsc/internal/tsoptions"
 	"github.com/microsoft/TypeScript/tsc/internal/tspath"
 	"github.com/microsoft/TypeScript/tsc/internal/vfs/vfstest"
@@ -17,17 +19,18 @@ import (
 )
 
 const ssc_prelude = `export {};
+declare const ssc: unique symbol;
 declare global {
-  type i8 = number & {};
-  type i16 = number & {};
-  type i32 = number & {};
-  type i64 = number & {};
-  type u8 = number & {};
-  type u16 = number & {};
-  type u32 = number & {};
-  type u64 = number & {};
-  type f32 = number & {};
-  type f64 = number & {};
+  type i8 = number & { readonly [ssc]: 'i8' };
+  type i16 = number & { readonly [ssc]: 'i16' };
+  type i32 = number & { readonly [ssc]: 'i32' };
+  type i64 = number & { readonly [ssc]: 'i64' };
+  type u8 = number & { readonly [ssc]: 'u8' };
+  type u16 = number & { readonly [ssc]: 'u16' };
+  type u32 = number & { readonly [ssc]: 'u32' };
+  type u64 = number & { readonly [ssc]: 'u64' };
+  type f32 = number & { readonly [ssc]: 'f32' };
+  type f64 = number & { readonly [ssc]: 'f64' };
   interface Array<T> { length: u64; [n: number]: T; [n: i64]: T; [n: u64]: T }
   interface Boolean {}
   interface CallableFunction {}
@@ -64,7 +67,16 @@ declare let fa64: f64;
 type ssc_result struct {
 	resultType      string
 	codes           []int32
+	messages        []string
 	suggestionCodes []int32
+}
+
+func ssc_messageTexts(diagnostic *ast.Diagnostic) []string {
+	texts := []string{diagnosticwriter.WrapASTDiagnostic(diagnostic).Localize(locale.Default)}
+	for chained := range slices.Values(diagnostic.MessageChain()) {
+		texts = append(texts, ssc_messageTexts(chained)...)
+	}
+	return texts
 }
 
 func ssc_check(t *testing.T, files map[string]string, rootFiles []string) ssc_result {
@@ -86,6 +98,7 @@ func ssc_check(t *testing.T, files map[string]string, rootFiles []string) ssc_re
 	for sourceFile := range slices.Values(p.GetSourceFiles()) {
 		for diagnostic := range slices.Values(p.GetSemanticDiagnostics(t.Context(), sourceFile)) {
 			result.codes = append(result.codes, diagnostic.Code())
+			result.messages = append(result.messages, ssc_messageTexts(diagnostic)...)
 		}
 	}
 	for diagnostic := range slices.Values(p.GetSuggestionDiagnostics(t.Context(), file)) {
@@ -321,7 +334,7 @@ func TestSscRelations(t *testing.T) {
 		{"literal in object", "const r: { v: i32 } = { v: 1 };", "", nil},
 		{"literals in tuple", "const r: [i32, i64] = [1, 2];", "[i32, i64]", nil},
 		{"literals in array argument", "declare function take(v: i32[]): void;\ntake([1, 2]);", "", nil},
-		{"typeof narrowing", "declare const ns: i32 | string;\nconst r = typeof ns === 'number' ? ns : a32;", "number | i32", nil},
+		{"typeof narrowing", "declare const ns: i32 | string;\nconst r = typeof ns === 'number' ? ns : a32;", "i32", nil},
 		{"const object", "const r = { a: 1, b: a32, c: a32 + a64, d: n } as const;", "{ readonly a: 1; readonly b: i32; readonly c: i64; readonly d: number; }", nil},
 		{"plain object", "const r = { a: 1, b: a32, c: a32 + a64, d: n };", "{ a: number; b: i32; c: i64; d: number; }", nil},
 		{"const tuple", "const r = [1, a32, a64] as const;", "readonly [1, i32, i64]", nil},
@@ -454,23 +467,24 @@ export {};
 			name       string
 			source     string
 			resultType string
+			codes      []int32
 		}{
-			{"lossy assignment", "declare const q: i64;\nconst r: i32 = q;", "i32"},
-			{"unary plus", "declare const p: i32;\nconst r = +p;", "number"},
-			{"literal in ssc context", "const o = { v: 1 } satisfies { v: i32 };\nconst r = o.v;", "number"},
-			{"huge literal", "const r = 1e1000;", "Infinity"},
-			{"literal over i64", "const r: i64 = 9223372036854775808;", "i64"},
+			{"lossy assignment", "declare const q: i64;\nconst r: i32 = q;", "i32", []int32{2322}},
+			{"unary plus", "declare const p: i32;\nconst r = +p;", "number", nil},
+			{"literal in ssc context", "const o = { v: 1 } satisfies { v: i32 };\nconst r = o.v;", "number", []int32{2322}},
+			{"huge literal", "const r = 1e1000;", "Infinity", nil},
+			{"literal over i64", "const r: i64 = 9223372036854775808;", "i64", []int32{2322}},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 				result := ssc_check(t, map[string]string{
 					"/node_modules/syscript/package.json": `{ "name": "syscript", "version": "0.0.0" }`,
-					"/node_modules/syscript/prelude.d.ts": strings.Replace(ssc_prelude, "  type f32 = number & {};\n", "", 1),
+					"/node_modules/syscript/prelude.d.ts": strings.Replace(ssc_prelude, "  type f32 = number & { readonly [ssc]: 'f32' };\n", "", 1),
 					"/main.ts":                            tc.source + "\nexport {};\n",
 				}, []string{"node_modules/syscript/prelude.d.ts", "main.ts"})
 				assert.Equal(t, result.resultType, tc.resultType)
-				assert.DeepEqual(t, result.codes, []int32(nil))
+				assert.DeepEqual(t, result.codes, tc.codes)
 			})
 		}
 	})
@@ -495,4 +509,81 @@ export {};
 		assert.Equal(t, result.resultType, "i32")
 		assert.DeepEqual(t, result.codes, []int32(nil))
 	})
+}
+
+func TestSscBrand(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		source     string
+		resultType string
+		codes      []int32
+	}{
+		{"identity survives generic inference", "declare function id<T>(v: T): T;\nconst r = id(a32) + b32;", "i32", nil},
+		{"identity survives a user alias", "type MyInt = i32;\ndeclare const m: MyInt;\nconst r = m + ua8;", "i32", nil},
+		{"different brands do not intersect", "declare const both: i32 & u8;\nconst r = both;", "never", nil},
+		{"the brand symbol is not visible outside the prelude", "declare const fake: number & { readonly [ssc]: 'i32' };\nconst r = 0;", "", []int32{2304}},
+		{"number is not a syscript integer", "const r: i32 = n;", "i32", []int32{2322}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := ssc_checkSource(t, tc.source)
+			if tc.resultType != "" {
+				assert.Equal(t, result.resultType, tc.resultType)
+			}
+			assert.DeepEqual(t, result.codes, tc.codes)
+		})
+	}
+}
+
+func TestSscHookCoverage(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		source     string
+		resultType string
+		codes      []int32
+		messages   []string
+	}{
+		{"unary plus keeps a large literal exact", "const r: u64 = +18446744073709551615;", "u64", nil, nil},
+		{"large literal is shown exactly", "const r = 18446744073709551615;", "18446744073709551615", nil, nil},
+		{"negative large literal is shown exactly", "const r = -9223372036854775808;", "-9223372036854775808", nil, nil},
+		{"comparison error shows the literal", "const r = ua64 === -1;", "boolean", []int32{2367}, []string{"This comparison appears to be unintentional because the types 'u64' and '-1' have no overlap."}},
+		{"operator error shows the literal", "const r = ua8 + 'x' - 300;", "", []int32{2362}, nil},
+		{"widening through an empty object intersection", "declare const v: i32 & {};\nconst r: i64 = v;", "i64", nil, nil},
+		{"widening through a number intersection", "declare const w: i32 & number;\nconst r: i64 = w;", "i64", nil, nil},
+		{"widening a union argument", "declare function f(v: i64): void;\nf(c ? a32 : ua8);\nconst r = 0;", "", nil, nil},
+		{"widening a conditional type", "type T<X> = X extends i32 ? X : never;\ndeclare const tc: T<i32>;\nconst r: i64 = tc;", "i64", nil, nil},
+		{"widening an indexed access", "declare const o: { v: i32 };\nconst r: i64 = o['v'];", "i64", nil, nil},
+		{"widening a NoInfer substitution", "type NoInfer<T> = intrinsic;\ndeclare const ni: NoInfer<i32>;\nconst r: i64 = ni;", "i64", nil, nil},
+		{"lossy NoInfer substitution", "type NoInfer<T> = intrinsic;\ndeclare const nl: NoInfer<i64>;\nconst r: i32 = nl;", "i32", []int32{2322}, nil},
+		{"widening a generic constraint", "function g<T extends i32>(v: T) {\n  const inner: i64 = v;\n}\nconst r = 0;", "", nil, nil},
+		{"widening an unknown intersection", "declare const ui: i32 & unknown;\nconst r: i64 = ui;", "i64", nil, nil},
+		{"widening a readonly array element", "declare const ra: readonly i32[];\nconst r: readonly i64[] = ra;", "", nil, nil},
+		{"widening a function return", "declare const fr: () => i32;\nconst r: () => i64 = fr;", "() => i64", nil, nil},
+		{"lossy function parameter", "declare const fp: (v: i32) => void;\nconst r: (v: i64) => void = fp;", "(v: i64) => void", []int32{2322}, nil},
+		{"literal in range to an optional target", "const r: u8 | undefined = 7;", "", nil, nil},
+		{"literal over range to an optional target shows the literal", "const r: u8 | undefined = 300;", "", []int32{2322}, []string{"Type '300' is not assignable to type 'u8 | undefined'."}},
+		{"literal over range to an optional parameter shows the literal", "declare function opt(v?: u8): void;\nopt(300);\nconst r = 0;", "", []int32{2345}, []string{"Argument of type '300' is not assignable to parameter of type 'u8 | undefined'."}},
+		{"number target takes a lossless integer", "const r: number = a32;", "number", nil, nil},
+		{"number target rejects a lossy integer", "const r: number = ua64;", "number", []int32{2322}, []string{"Type 'u64' is not assignable to type 'number'."}},
+		{"number target takes a large literal", "const r: number = 18446744073709551615;", "number", nil, nil},
+		{"comparison with number uses f64", "const r = a32 === n;", "boolean", nil, nil},
+		{"comparison with number rejects a lossy integer", "const r = ua64 === n;", "boolean", []int32{2367}, nil},
+		{"lossy assignment message names both types", "const r: i32 = a64;", "i32", []int32{2322}, []string{"Type 'i64' is not assignable to type 'i32'."}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := ssc_checkSource(t, tc.source)
+			if tc.resultType != "" {
+				assert.Equal(t, result.resultType, tc.resultType)
+			}
+			assert.DeepEqual(t, result.codes, tc.codes)
+			if tc.messages != nil {
+				assert.DeepEqual(t, result.messages, tc.messages)
+			}
+		})
+	}
 }
