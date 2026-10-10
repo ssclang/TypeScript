@@ -176,9 +176,6 @@ func (c *Checker) isTypeRelatedTo(source *Type, target *Type, relation *Relation
 	if source == target {
 		return true
 	}
-	if isSsc, related := c.ssc_Related(source, target, relation); isSsc { // syscript
-		return related
-	}
 	if relation != c.identityRelation {
 		if relation == c.comparableRelation && target.flags&TypeFlagsNever == 0 && c.isSimpleTypeRelatedTo(target, source, relation, nil) || c.isSimpleTypeRelatedTo(source, target, relation, nil) {
 			return true
