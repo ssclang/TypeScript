@@ -406,7 +406,7 @@ func (c *Checker) ssc_literalInteger(t *Type) (isInteger bool, value *big.Int) {
 
 func (c *Checker) ssc_isLiteralInRange(literal *Type, name string) bool {
 	if literal.flags&TypeFlagsStringLiteral != 0 {
-		return name == "char" && c.ssc_isCharLiteral(literal)
+		return slices.Contains(ssc_losslessTargets["char"], name) && c.ssc_isCharLiteral(literal)
 	}
 	if slices.Contains(ssc_floatTypes, name) {
 		return true
