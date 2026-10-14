@@ -1,5 +1,5 @@
 diff --git a/tsc/internal/checker/checker.go b/tsc/internal/checker/checker.go
-index 345ea00ce1..9d6d6b0e3f 100644
+index 73de52e18d..7e94e2e0db 100644
 --- a/tsc/internal/checker/checker.go
 +++ b/tsc/internal/checker/checker.go
 @@ -7,6 +7,7 @@ import (
@@ -10,7 +10,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  	"slices"
  	"strconv"
  	"strings"
-@@ -909,6 +910,12 @@ type Checker struct {
+@@ -922,6 +923,12 @@ type Checker struct {
  
  	mu     sync.Mutex
  	tracer *Tracer // Optional tracer for trace events and type recording (for --generateTrace)
@@ -23,7 +23,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  }
  
  func NewChecker(program Program, tracer *Tracer) (*Checker, *sync.Mutex) {
-@@ -7950,6 +7957,9 @@ func (c *Checker) checkExpressionWorker(node *ast.Node, checkMode CheckMode) *Ty
+@@ -7962,6 +7969,9 @@ func (c *Checker) checkExpressionWorker(node *ast.Node, checkMode CheckMode) *Ty
  		return c.getFreshTypeOfLiteralType(c.getStringLiteralType(node.Text()))
  	case ast.KindNumericLiteral:
  		c.checkGrammarNumericLiteral(node.AsNumericLiteral())
@@ -33,7 +33,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  		return c.getFreshTypeOfLiteralType(c.getNumberLiteralType(jsnum.FromString(node.Text())))
  	case ast.KindBigIntLiteral:
  		c.checkGrammarBigIntLiteral(node.AsBigIntLiteral())
-@@ -11099,8 +11109,14 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
+@@ -11112,8 +11122,14 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
  	case ast.KindNumericLiteral:
  		switch expr.Operator {
  		case ast.KindMinusToken:
@@ -48,7 +48,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  			return c.getFreshTypeOfLiteralType(c.getNumberLiteralType(+jsnum.FromString(expr.Operand.Text())))
  		}
  	case ast.KindBigIntLiteral:
-@@ -11114,6 +11130,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
+@@ -11127,6 +11143,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
  		if c.maybeTypeOfKindConsideringBaseConstraint(operandType, TypeFlagsESSymbolLike) {
  			c.error(expr.Operand, diagnostics.The_0_operator_cannot_be_applied_to_type_symbol, scanner.TokenToString(expr.Operator))
  		}
@@ -58,7 +58,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  		if expr.Operator == ast.KindPlusToken {
  			if c.maybeTypeOfKindConsideringBaseConstraint(operandType, TypeFlagsBigIntLike) {
  				c.error(expr.Operand, diagnostics.Operator_0_cannot_be_applied_to_type_1, scanner.TokenToString(expr.Operator), c.TypeToString(c.getBaseTypeOfLiteralType(operandType)))
-@@ -11138,6 +11157,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
+@@ -11151,6 +11170,9 @@ func (c *Checker) checkPrefixUnaryExpression(node *ast.Node) *Type {
  			// run check only if former checks succeeded to avoid reporting cascading errors
  			c.checkReferenceExpression(expr.Operand, diagnostics.The_operand_of_an_increment_or_decrement_operator_must_be_a_variable_or_a_property_access, diagnostics.The_operand_of_an_increment_or_decrement_operator_may_not_be_an_optional_property_access)
  		}
@@ -68,7 +68,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  		return c.getUnaryResultType(operandType)
  	}
  	return c.errorType
-@@ -11154,6 +11176,9 @@ func (c *Checker) checkPostfixUnaryExpression(node *ast.Node) *Type {
+@@ -11167,6 +11189,9 @@ func (c *Checker) checkPostfixUnaryExpression(node *ast.Node) *Type {
  		// run check only if former checks succeeded to avoid reporting cascading errors
  		c.checkReferenceExpression(expr.Operand, diagnostics.The_operand_of_an_increment_or_decrement_operator_must_be_a_variable_or_a_property_access, diagnostics.The_operand_of_an_increment_or_decrement_operator_may_not_be_an_optional_property_access)
  	}
@@ -78,7 +78,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  	return c.getUnaryResultType(operandType)
  }
  
-@@ -12557,6 +12582,9 @@ func (c *Checker) checkAssertionDeferred(node *ast.Node) {
+@@ -12570,6 +12595,9 @@ func (c *Checker) checkAssertionDeferred(node *ast.Node) {
  	exprType := c.getRegularTypeOfObjectLiteral(c.getBaseTypeOfLiteralType(c.assertionLinks.Get(node).exprType))
  	targetType := c.getTypeFromTypeNode(typeNode)
  	if !c.isErrorType(targetType) {
@@ -88,7 +88,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  		widenedType := c.getWidenedType(exprType)
  		if !c.isTypeComparableTo(targetType, widenedType) {
  			errNode := node
-@@ -12623,6 +12651,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12636,6 +12664,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  		// If both are any or unknown, allow operation; assume it will resolve to number
  		if c.isTypeAssignableToKind(leftType, TypeFlagsAnyOrUnknown) && c.isTypeAssignableToKind(rightType, TypeFlagsAnyOrUnknown) || !c.maybeTypeOfKind(leftType, TypeFlagsBigIntLike) && !c.maybeTypeOfKind(rightType, TypeFlagsBigIntLike) {
  			resultType = c.numberType
@@ -98,7 +98,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  		} else if c.bothAreBigIntLike(leftType, rightType) {
  			switch operator {
  			case ast.KindGreaterThanGreaterThanGreaterThanToken, ast.KindGreaterThanGreaterThanGreaterThanEqualsToken:
-@@ -12664,6 +12695,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12677,6 +12708,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  			// Operands of an enum type are treated as having the primitive type Number.
  			// If both operands are of the Number primitive type, the result is of the Number primitive type.
  			resultType = c.numberType
@@ -108,7 +108,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  		} else if c.isTypeAssignableToKindEx(leftType, TypeFlagsBigIntLike, true /*strict*/) && c.isTypeAssignableToKindEx(rightType, TypeFlagsBigIntLike, true /*strict*/) {
  			// If both operands are of the BigInt primitive type, the result is of the BigInt primitive type.
  			resultType = c.bigintType
-@@ -12677,6 +12711,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12690,6 +12724,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  				resultType = c.errorType
  			} else {
  				resultType = c.anyType
@@ -118,7 +118,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  			}
  		}
  		// Symbols are not allowed at all in arithmetic expressions
-@@ -12699,6 +12736,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12712,6 +12749,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  		}
  		return resultType
  	case ast.KindLessThanToken, ast.KindGreaterThanToken, ast.KindLessThanEqualsToken, ast.KindGreaterThanEqualsToken:
@@ -128,7 +128,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  		if c.checkForDisallowedESSymbolOperand(left, right, leftType, rightType, operator) {
  			leftType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(leftType, left))
  			rightType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(rightType, right))
-@@ -12988,6 +13028,9 @@ func (c *Checker) reportOperatorErrorUnless(leftType *Type, operator ast.Kind, r
+@@ -13001,6 +13041,9 @@ func (c *Checker) reportOperatorErrorUnless(leftType *Type, operator ast.Kind, r
  }
  
  func (c *Checker) getBaseTypesIfUnrelated(leftType *Type, rightType *Type, isRelated func(left *Type, right *Type) bool) (*Type, *Type) {
@@ -138,7 +138,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  	effectiveLeft := leftType
  	effectiveRight := rightType
  	leftBase := c.getBaseTypeOfLiteralType(leftType)
-@@ -13042,6 +13085,9 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
+@@ -13055,6 +13098,9 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
  }
  
  func (c *Checker) checkArithmeticOperandType(operand *ast.Node, t *Type, diagnostic *diagnostics.Message, isAwaitValid bool) bool {
@@ -148,7 +148,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  	if !c.isTypeAssignableTo(t, c.numberOrBigIntType) {
  		var awaitedType *Type
  		if isAwaitValid {
-@@ -26060,6 +26106,9 @@ func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t *Type, contextual
+@@ -26105,6 +26151,9 @@ func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t *Type, contextual
  
  func (c *Checker) isLiteralOfContextualType(candidateType *Type, contextualType *Type) bool {
  	if contextualType != nil {
@@ -158,7 +158,7 @@ index 345ea00ce1..9d6d6b0e3f 100644
  		if contextualType.flags&TypeFlagsUnionOrIntersection != 0 {
  			return core.Some(contextualType.Types(), func(t *Type) bool {
  				return c.isLiteralOfContextualType(candidateType, t)
-@@ -28185,6 +28234,11 @@ func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict
+@@ -28230,6 +28279,11 @@ func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict
  	if source.flags&kind != 0 {
  		return true
  	}
@@ -186,10 +186,10 @@ index 93bed4b355..8044aff084 100644
  }
  
 diff --git a/tsc/internal/checker/nodebuilderimpl.go b/tsc/internal/checker/nodebuilderimpl.go
-index cd4643ac6f..c3dcb52536 100644
+index 98aaa03045..cf401d6486 100644
 --- a/tsc/internal/checker/nodebuilderimpl.go
 +++ b/tsc/internal/checker/nodebuilderimpl.go
-@@ -3446,6 +3446,9 @@ func (b *NodeBuilderImpl) typeToTypeNode(t *Type) *ast.TypeNode {
+@@ -3459,6 +3459,9 @@ func (b *NodeBuilderImpl) typeToTypeNode(t *Type) *ast.TypeNode {
  		return b.f.NewLiteralTypeNode(lit)
  	}
  	if t.flags&TypeFlagsNumberLiteral != 0 {
