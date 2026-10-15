@@ -1,3 +1,122 @@
+diff --git a/tsc/cmd/sscapi/addon.c b/tsc/cmd/sscapi/addon.c
+new file mode 100644
+index 0000000000..4bdd0cf362
+--- /dev/null
++++ b/tsc/cmd/sscapi/addon.c
+@@ -0,0 +1,48 @@
++#include <stdlib.h>
++#include <node_api.h>
++#include "_cgo_export.h"
++
++static napi_value open(napi_env env, napi_callback_info info) {
++	size_t argc = 1;
++	napi_value argv[1];
++	napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
++	char cwd[4096];
++	size_t cwdLength;
++	napi_get_value_string_utf8(env, argv[0], cwd, sizeof cwd, &cwdLength);
++	sscApiOpen(cwd, (int)cwdLength);
++	return NULL;
++}
++
++static napi_value request(napi_env env, napi_callback_info info) {
++	size_t argc = 2;
++	napi_value argv[2];
++	napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
++	char method[256];
++	size_t methodLength;
++	napi_get_value_string_utf8(env, argv[0], method, sizeof method, &methodLength);
++	void *params;
++	size_t paramsLength;
++	napi_get_buffer_info(env, argv[1], &params, &paramsLength);
++	int resultLength = 0;
++	int isError = 0;
++	char *result = sscApiRequest(method, (int)methodLength, params, (int)paramsLength, &resultLength, &isError);
++	napi_value value = NULL;
++	if (isError) {
++		result = realloc(result, resultLength + 1);
++		result[resultLength] = 0;
++		napi_throw_error(env, NULL, result);
++	} else {
++		napi_create_buffer_copy(env, resultLength, result, NULL, &value);
++	}
++	free(result);
++	return value;
++}
++
++NAPI_MODULE_INIT() {
++	napi_value function;
++	napi_create_function(env, "open", NAPI_AUTO_LENGTH, open, NULL, &function);
++	napi_set_named_property(env, exports, "open", function);
++	napi_create_function(env, "request", NAPI_AUTO_LENGTH, request, NULL, &function);
++	napi_set_named_property(env, exports, "request", function);
++	return exports;
++}
+diff --git a/tsc/cmd/sscapi/main.go b/tsc/cmd/sscapi/main.go
+new file mode 100644
+index 0000000000..db1982509b
+--- /dev/null
++++ b/tsc/cmd/sscapi/main.go
+@@ -0,0 +1,59 @@
++package main
++
++/*
++#include <stdlib.h>
++*/
++import "C"
++
++import (
++	"context"
++	"os"
++	"unsafe"
++
++	"github.com/microsoft/TypeScript/tsc/internal/api"
++	"github.com/microsoft/TypeScript/tsc/internal/bundled"
++	"github.com/microsoft/TypeScript/tsc/internal/json"
++	"github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto"
++	"github.com/microsoft/TypeScript/tsc/internal/project"
++	"github.com/microsoft/TypeScript/tsc/internal/tspath"
++	"github.com/microsoft/TypeScript/tsc/internal/vfs/osvfs"
++)
++
++var session *api.Session
++
++func main() {}
++
++//export sscApiOpen
++func sscApiOpen(cwd *C.char, cwdLength C.int) {
++	directory := C.GoStringN(cwd, cwdLength)
++	workingDirectory, _ := os.Getwd()
++	session = api.NewStandaloneSession(&project.SessionInit{
++		BackgroundCtx: context.Background(),
++		FS:            bundled.WrapFS(osvfs.FS()),
++		Options: &project.SessionOptions{
++			CurrentDirectory:   tspath.ToRootedDirectoryPath(directory, tspath.ToRootedDirectoryPath(workingDirectory, "")),
++			DefaultLibraryPath: bundled.LibPath(),
++			PositionEncoding:   lsproto.PositionEncodingKindUTF8,
++		},
++	}, &api.SessionOptions{})
++}
++
++//export sscApiRequest
++func sscApiRequest(method *C.char, methodLength C.int, params *C.char, paramsLength C.int, resultLength *C.int, isError *C.int) unsafe.Pointer {
++	result, err := session.HandleRequest(context.Background(), C.GoStringN(method, methodLength), json.Value(C.GoBytes(unsafe.Pointer(params), paramsLength)))
++	var payload []byte
++	if err != nil {
++		*isError = 1
++		payload = []byte(err.Error())
++	} else if raw, ok := result.(api.RawBinary); ok {
++		payload = raw
++	} else {
++		payload, err = json.Marshal(result)
++		if err != nil {
++			*isError = 1
++			payload = []byte(err.Error())
++		}
++	}
++	*resultLength = C.int(len(payload))
++	return C.CBytes(payload)
++}
 diff --git a/tsc/internal/checker/checker.go b/tsc/internal/checker/checker.go
 index 73de52e18d..7e94e2e0db 100644
 --- a/tsc/internal/checker/checker.go
