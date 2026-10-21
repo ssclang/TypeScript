@@ -1,3 +1,23 @@
+diff --git a/syscript.sh b/syscript.sh
+new file mode 100755
+index 0000000000..12ada22a41
+--- /dev/null
++++ b/syscript.sh
+@@ -0,0 +1,14 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")"
++
++base=$(git log --diff-filter=A --format=%H -- tsc/internal/checker/ssc.go | tail -n 1)^
++git diff "$base" -- . ':(exclude)syscript.patch' > syscript.patch
++
++node_include_dir=$(node -p "require('path').join(process.execPath, '..', '..', 'include', 'node')")
++
++cd tsc
++go build -o ../built/local/tsc ./cmd/tsc
++CGO_CFLAGS="-I$node_include_dir" go build -buildmode=c-shared -o ../built/local/tsc.node ./cmd/sscapi
++rm -f ../built/local/tsc.h
 diff --git a/tsc/cmd/sscapi/addon.c b/tsc/cmd/sscapi/addon.c
 new file mode 100644
 index 0000000000..4bdd0cf362
@@ -118,7 +138,7 @@ index 0000000000..db1982509b
 +	return C.CBytes(payload)
 +}
 diff --git a/tsc/internal/checker/checker.go b/tsc/internal/checker/checker.go
-index 73de52e18d..7e94e2e0db 100644
+index 73de52e18d..8be51c7753 100644
 --- a/tsc/internal/checker/checker.go
 +++ b/tsc/internal/checker/checker.go
 @@ -7,6 +7,7 @@ import (
@@ -247,7 +267,29 @@ index 73de52e18d..7e94e2e0db 100644
  		if c.checkForDisallowedESSymbolOperand(left, right, leftType, rightType, operator) {
  			leftType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(leftType, left))
  			rightType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(rightType, right))
-@@ -13001,6 +13041,9 @@ func (c *Checker) reportOperatorErrorUnless(leftType *Type, operator ast.Kind, r
+@@ -12748,7 +12788,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+ 		return c.checkInExpression(left, right, leftType, rightType)
+ 	case ast.KindAmpersandAmpersandToken, ast.KindAmpersandAmpersandEqualsToken:
+ 		resultType := leftType
+-		if c.hasTypeFacts(leftType, TypeFactsTruthy) {
++		if ssc_type := c.ssc_LogicalResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
++			resultType = ssc_type
++		} else if c.hasTypeFacts(leftType, TypeFactsTruthy) {
+ 			t := leftType
+ 			if !c.strictNullChecks {
+ 				t = c.getBaseTypeOfLiteralType(rightType)
+@@ -12761,7 +12803,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+ 		return resultType
+ 	case ast.KindBarBarToken, ast.KindBarBarEqualsToken:
+ 		resultType := leftType
+-		if c.hasTypeFacts(leftType, TypeFactsFalsy) {
++		if ssc_type := c.ssc_LogicalResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
++			resultType = ssc_type
++		} else if c.hasTypeFacts(leftType, TypeFactsFalsy) {
+ 			resultType = c.getUnionTypeEx([]*Type{c.GetNonNullableType(c.removeDefinitelyFalsyTypes(leftType)), rightType}, UnionReductionSubtype, nil, nil)
+ 		}
+ 		if operator == ast.KindBarBarEqualsToken {
+@@ -13001,6 +13045,9 @@ func (c *Checker) reportOperatorErrorUnless(leftType *Type, operator ast.Kind, r
  }
  
  func (c *Checker) getBaseTypesIfUnrelated(leftType *Type, rightType *Type, isRelated func(left *Type, right *Type) bool) (*Type, *Type) {
@@ -257,7 +299,7 @@ index 73de52e18d..7e94e2e0db 100644
  	effectiveLeft := leftType
  	effectiveRight := rightType
  	leftBase := c.getBaseTypeOfLiteralType(leftType)
-@@ -13055,6 +13098,9 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
+@@ -13055,6 +13102,9 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
  }
  
  func (c *Checker) checkArithmeticOperandType(operand *ast.Node, t *Type, diagnostic *diagnostics.Message, isAwaitValid bool) bool {
@@ -267,7 +309,7 @@ index 73de52e18d..7e94e2e0db 100644
  	if !c.isTypeAssignableTo(t, c.numberOrBigIntType) {
  		var awaitedType *Type
  		if isAwaitValid {
-@@ -26105,6 +26151,9 @@ func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t *Type, contextual
+@@ -26105,6 +26155,9 @@ func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t *Type, contextual
  
  func (c *Checker) isLiteralOfContextualType(candidateType *Type, contextualType *Type) bool {
  	if contextualType != nil {
@@ -277,7 +319,7 @@ index 73de52e18d..7e94e2e0db 100644
  		if contextualType.flags&TypeFlagsUnionOrIntersection != 0 {
  			return core.Some(contextualType.Types(), func(t *Type) bool {
  				return c.isLiteralOfContextualType(candidateType, t)
-@@ -28230,6 +28279,11 @@ func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict
+@@ -28230,6 +28283,11 @@ func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict
  	if source.flags&kind != 0 {
  		return true
  	}
@@ -344,10 +386,10 @@ index a9bc484fef..e1155044aa 100644
  	if r.relation == r.c.comparableRelation && target.flags&TypeFlagsNever == 0 && r.c.isSimpleTypeRelatedTo(target, source, r.relation, nil) ||
 diff --git a/tsc/internal/checker/ssc.go b/tsc/internal/checker/ssc.go
 new file mode 100644
-index 0000000000..b404719f49
+index 0000000000..fd72f99760
 --- /dev/null
 +++ b/tsc/internal/checker/ssc.go
-@@ -0,0 +1,430 @@
+@@ -0,0 +1,452 @@
 +package checker
 +
 +import (
@@ -606,6 +648,28 @@ index 0000000000..b404719f49
 +	return result
 +}
 +
++func (c *Checker) ssc_isNumberOperand(t *Type) bool {
++	if isSsc, _ := c.ssc_CommonType(t); isSsc {
++		return true
++	}
++	return everyType(t, func(memberType *Type) bool { return memberType.flags&TypeFlagsNumberLiteral != 0 })
++}
++
++func (c *Checker) ssc_LogicalResultTypeOrReportError(left *Type, right *Type, operator ast.Kind, errorNode *ast.Node) *Type {
++	if !c.ssc_IsEnabled() || !c.ssc_isNumberOperand(left) || !c.ssc_isNumberOperand(right) {
++		return nil
++	}
++	isSsc, result := c.ssc_BinaryResultType(left, right)
++	if !isSsc {
++		return nil
++	}
++	if result == nil {
++		c.reportOperatorError(left, operator, right, errorNode, nil)
++		return c.errorType
++	}
++	return result
++}
++
 +func (c *Checker) ssc_Related(source *Type, target *Type, relation *Relation) (isSsc bool, related bool) {
 +	if !c.ssc_IsEnabled() {
 +		return false, false
@@ -780,10 +844,10 @@ index 0000000000..b404719f49
 +}
 diff --git a/tsc/internal/checker/ssc_test.go b/tsc/internal/checker/ssc_test.go
 new file mode 100644
-index 0000000000..ff6e7d17b8
+index 0000000000..8855241a6a
 --- /dev/null
 +++ b/tsc/internal/checker/ssc_test.go
-@@ -0,0 +1,693 @@
+@@ -0,0 +1,704 @@
 +package checker_test
 +
 +import (
@@ -1033,6 +1097,17 @@ index 0000000000..ff6e7d17b8
 +		{"compound assignment number to f64", "let v: f64 = 0;\nv += n;", "", nil},
 +		{"compound assignment number to i32", "let v: i32 = 0;\nv += n;", "", []int32{2322}},
 +		{"loop over length", "for (let i: u64 = 0; i < items.length; i++) { items[i]; }", "", nil},
++		{"logical and same type", "const r = a32 && b32;", "i32", nil},
++		{"logical or same type", "const r = a32 || b32;", "i32", nil},
++		{"logical and literal", "const r = a32 && 5;", "i32", nil},
++		{"logical or literal", "const r = a32 || 5;", "i32", nil},
++		{"logical and different types", "const r = fa64 && a32;", "f64", nil},
++		{"logical or literal beyond operand range", "const r = ua8 || 300;", "u16", nil},
++		{"logical literal union left", "const r = (c ? 0 : 5) && a32;", "i32", nil},
++		{"logical without common type", "const r = a64 || ua64;", "any", []int32{2365}},
++		{"logical and boolean left", "const r = c && a32;", "false | i32", nil},
++		{"logical and booleans", "const r = c && c;", "boolean", nil},
++		{"logical literals only", "const r = 1 || 2;", "1", nil},
 +	}
 +	for _, tc := range cases {
 +		t.Run(tc.name, func(t *testing.T) {

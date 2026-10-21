@@ -247,6 +247,17 @@ func TestSscOperators(t *testing.T) {
 		{"compound assignment number to f64", "let v: f64 = 0;\nv += n;", "", nil},
 		{"compound assignment number to i32", "let v: i32 = 0;\nv += n;", "", []int32{2322}},
 		{"loop over length", "for (let i: u64 = 0; i < items.length; i++) { items[i]; }", "", nil},
+		{"logical and same type", "const r = a32 && b32;", "i32", nil},
+		{"logical or same type", "const r = a32 || b32;", "i32", nil},
+		{"logical and literal", "const r = a32 && 5;", "i32", nil},
+		{"logical or literal", "const r = a32 || 5;", "i32", nil},
+		{"logical and different types", "const r = fa64 && a32;", "f64", nil},
+		{"logical or literal beyond operand range", "const r = ua8 || 300;", "u16", nil},
+		{"logical literal union left", "const r = (c ? 0 : 5) && a32;", "i32", nil},
+		{"logical without common type", "const r = a64 || ua64;", "any", []int32{2365}},
+		{"logical and boolean left", "const r = c && a32;", "false | i32", nil},
+		{"logical and booleans", "const r = c && c;", "boolean", nil},
+		{"logical literals only", "const r = 1 || 2;", "1", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -256,6 +256,28 @@ func (c *Checker) ssc_BinaryResultTypeOrReportError(left *Type, right *Type, ope
 	return result
 }
 
+func (c *Checker) ssc_isNumberOperand(t *Type) bool {
+	if isSsc, _ := c.ssc_CommonType(t); isSsc {
+		return true
+	}
+	return everyType(t, func(memberType *Type) bool { return memberType.flags&TypeFlagsNumberLiteral != 0 })
+}
+
+func (c *Checker) ssc_LogicalResultTypeOrReportError(left *Type, right *Type, operator ast.Kind, errorNode *ast.Node) *Type {
+	if !c.ssc_IsEnabled() || !c.ssc_isNumberOperand(left) || !c.ssc_isNumberOperand(right) {
+		return nil
+	}
+	isSsc, result := c.ssc_BinaryResultType(left, right)
+	if !isSsc {
+		return nil
+	}
+	if result == nil {
+		c.reportOperatorError(left, operator, right, errorNode, nil)
+		return c.errorType
+	}
+	return result
+}
+
 func (c *Checker) ssc_Related(source *Type, target *Type, relation *Relation) (isSsc bool, related bool) {
 	if !c.ssc_IsEnabled() {
 		return false, false

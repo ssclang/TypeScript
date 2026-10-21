@@ -12788,7 +12788,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
 		return c.checkInExpression(left, right, leftType, rightType)
 	case ast.KindAmpersandAmpersandToken, ast.KindAmpersandAmpersandEqualsToken:
 		resultType := leftType
-		if c.hasTypeFacts(leftType, TypeFactsTruthy) {
+		if ssc_type := c.ssc_LogicalResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
+			resultType = ssc_type
+		} else if c.hasTypeFacts(leftType, TypeFactsTruthy) {
 			t := leftType
 			if !c.strictNullChecks {
 				t = c.getBaseTypeOfLiteralType(rightType)
@@ -12801,7 +12803,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
 		return resultType
 	case ast.KindBarBarToken, ast.KindBarBarEqualsToken:
 		resultType := leftType
-		if c.hasTypeFacts(leftType, TypeFactsFalsy) {
+		if ssc_type := c.ssc_LogicalResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
+			resultType = ssc_type
+		} else if c.hasTypeFacts(leftType, TypeFactsFalsy) {
 			resultType = c.getUnionTypeEx([]*Type{c.GetNonNullableType(c.removeDefinitelyFalsyTypes(leftType)), rightType}, UnionReductionSubtype, nil, nil)
 		}
 		if operator == ast.KindBarBarEqualsToken {
