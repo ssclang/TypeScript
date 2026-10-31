@@ -268,10 +268,10 @@ index 73de52e18d..0adf3e321d 100644
  	}
 diff --git a/tsc/internal/checker/ssc.go b/tsc/internal/checker/ssc.go
 new file mode 100644
-index 0000000000..880f07fde2
+index 0000000000..3975ab4297
 --- /dev/null
 +++ b/tsc/internal/checker/ssc.go
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,229 @@
 +package checker
 +
 +import (
@@ -344,9 +344,7 @@ index 0000000000..880f07fde2
 +		}
 +		if packageName, ok := packageJson.Name.GetValue(); ok && packageName == "syscript" {
 +			if name == "f64" {
-+				if declaration.Type().Kind == ast.KindNumberKeyword {
-+					symbolByName[name] = symbol
-+				}
++				symbolByName[name] = symbol
 +				continue
 +			}
 +			brand := ssc_getSscBrandTypeLiteral(declaration, name)
@@ -384,6 +382,9 @@ index 0000000000..880f07fde2
 +	}
 +	if t.flags&TypeFlagsIntersection == 0 {
 +		return nil
++	}
++	if f64Symbol := symbolByName["f64"]; f64Symbol != nil && t == c.getDeclaredTypeOfSymbol(f64Symbol) {
++		return f64Symbol
 +	}
 +	for memberType := range slices.Values(t.Types()) {
 +		if symbol := symbolByBrand[memberType.symbol]; symbol != nil {
@@ -502,10 +503,10 @@ index 0000000000..880f07fde2
 +}
 diff --git a/tsc/internal/checker/ssc_test.go b/tsc/internal/checker/ssc_test.go
 new file mode 100644
-index 0000000000..3898ab8e23
+index 0000000000..65ba5a0f4d
 --- /dev/null
 +++ b/tsc/internal/checker/ssc_test.go
-@@ -0,0 +1,359 @@
+@@ -0,0 +1,361 @@
 +package checker_test
 +
 +import (
@@ -538,7 +539,7 @@ index 0000000000..3898ab8e23
 +  type u32 = number & { readonly [ssc]: 'u32' };
 +  type u64 = number & { readonly [ssc]: 'u64' };
 +  type f32 = number & { readonly [ssc]: 'f32' };
-+  type f64 = number;
++  type f64 = number & {};
 +  type char = number & { readonly [ssc]: 'char' };
 +  interface Array<T> { length: u64; [n: number]: T; [n: i64]: T; [n: u64]: T }
 +  interface Boolean {}
@@ -650,11 +651,13 @@ index 0000000000..3898ab8e23
 +		{"same type", "const r = a32 + b32;", "i32", nil},
 +		{"different types", "const r = a32 + a64;", "any", []int32{2365}},
 +		{"literal is a number", "const r = a32 + 1;", "any", []int32{2365}},
-+		{"literal with f64", "const r = fa64 + 1;", "number", nil},
-+		{"number with f64", "const r = fa64 + n;", "number", nil},
++		{"literal with f64", "const r = fa64 + 1;", "f64", nil},
++		{"number with f64", "const r = fa64 + n;", "f64", nil},
++		{"f64 with f64", "const r = fa64 * fa64;", "f64", nil},
 +		{"number with i32", "const r = a32 + n;", "any", []int32{2365}},
-+		{"literals only", "const r = 1 + 2;", "number", nil},
-+		{"number only", "const r = n + n;", "number", nil},
++		{"literals only", "const r = 1 + 2;", "f64", nil},
++		{"literal variable stays a literal", "const r = 1;", "1", nil},
++		{"number only", "const r = n + n;", "f64", nil},
 +		{"constructor result", "declare function i32(v: number): i32;\nconst r = a32 + i32(1);", "i32", nil},
 +		{"same type union", "const r = (c ? a32 : b32) + a32;", "i32", nil},
 +		{"mixed union", "const r = (c ? a32 : a64) + a32;", "any", []int32{2365}},
@@ -718,9 +721,9 @@ index 0000000000..3898ab8e23
 +		{"no widening", "const r: i64 = a32;", "i64", []int32{2322}},
 +		{"no narrowing", "const r: i32 = a64;", "i32", []int32{2322}},
 +		{"literal assignment", "const r: i32 = 1;", "i32", []int32{2322}},
-+		{"literal to f64", "const r: f64 = 1.5;", "number", nil},
++		{"literal to f64", "const r: f64 = 1.5;", "f64", nil},
 +		{"number assignment", "const r: i32 = n;", "i32", []int32{2322}},
-+		{"number to f64", "const r: f64 = n;", "number", nil},
++		{"number to f64", "const r: f64 = n;", "f64", nil},
 +		{"f64 to number", "const r: number = fa64;", "number", nil},
 +		{"literal argument", "declare function take(v: i32): void;\ntake(1);", "", []int32{2345}},
 +		{"literal return", "function f(): i32 { return 0; }", "", []int32{2322}},

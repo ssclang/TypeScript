@@ -70,9 +70,7 @@ func (c *Checker) ssc_loadPrelude() (symbolByBrand map[*ast.Symbol]*ast.Symbol, 
 		}
 		if packageName, ok := packageJson.Name.GetValue(); ok && packageName == "syscript" {
 			if name == "f64" {
-				if declaration.Type().Kind == ast.KindNumberKeyword {
-					symbolByName[name] = symbol
-				}
+				symbolByName[name] = symbol
 				continue
 			}
 			brand := ssc_getSscBrandTypeLiteral(declaration, name)
@@ -110,6 +108,9 @@ func (c *Checker) ssc_symbol(t *Type) *ast.Symbol {
 	}
 	if t.flags&TypeFlagsIntersection == 0 {
 		return nil
+	}
+	if f64Symbol := symbolByName["f64"]; f64Symbol != nil && t == c.getDeclaredTypeOfSymbol(f64Symbol) {
+		return f64Symbol
 	}
 	for memberType := range slices.Values(t.Types()) {
 		if symbol := symbolByBrand[memberType.symbol]; symbol != nil {

@@ -30,7 +30,7 @@ declare global {
   type u32 = number & { readonly [ssc]: 'u32' };
   type u64 = number & { readonly [ssc]: 'u64' };
   type f32 = number & { readonly [ssc]: 'f32' };
-  type f64 = number;
+  type f64 = number & {};
   type char = number & { readonly [ssc]: 'char' };
   interface Array<T> { length: u64; [n: number]: T; [n: i64]: T; [n: u64]: T }
   interface Boolean {}
@@ -142,11 +142,13 @@ func TestSscOperators(t *testing.T) {
 		{"same type", "const r = a32 + b32;", "i32", nil},
 		{"different types", "const r = a32 + a64;", "any", []int32{2365}},
 		{"literal is a number", "const r = a32 + 1;", "any", []int32{2365}},
-		{"literal with f64", "const r = fa64 + 1;", "number", nil},
-		{"number with f64", "const r = fa64 + n;", "number", nil},
+		{"literal with f64", "const r = fa64 + 1;", "f64", nil},
+		{"number with f64", "const r = fa64 + n;", "f64", nil},
+		{"f64 with f64", "const r = fa64 * fa64;", "f64", nil},
 		{"number with i32", "const r = a32 + n;", "any", []int32{2365}},
-		{"literals only", "const r = 1 + 2;", "number", nil},
-		{"number only", "const r = n + n;", "number", nil},
+		{"literals only", "const r = 1 + 2;", "f64", nil},
+		{"literal variable stays a literal", "const r = 1;", "1", nil},
+		{"number only", "const r = n + n;", "f64", nil},
 		{"constructor result", "declare function i32(v: number): i32;\nconst r = a32 + i32(1);", "i32", nil},
 		{"same type union", "const r = (c ? a32 : b32) + a32;", "i32", nil},
 		{"mixed union", "const r = (c ? a32 : a64) + a32;", "any", []int32{2365}},
@@ -210,9 +212,9 @@ func TestSscRelations(t *testing.T) {
 		{"no widening", "const r: i64 = a32;", "i64", []int32{2322}},
 		{"no narrowing", "const r: i32 = a64;", "i32", []int32{2322}},
 		{"literal assignment", "const r: i32 = 1;", "i32", []int32{2322}},
-		{"literal to f64", "const r: f64 = 1.5;", "number", nil},
+		{"literal to f64", "const r: f64 = 1.5;", "f64", nil},
 		{"number assignment", "const r: i32 = n;", "i32", []int32{2322}},
-		{"number to f64", "const r: f64 = n;", "number", nil},
+		{"number to f64", "const r: f64 = n;", "f64", nil},
 		{"f64 to number", "const r: number = fa64;", "number", nil},
 		{"literal argument", "declare function take(v: i32): void;\ntake(1);", "", []int32{2345}},
 		{"literal return", "function f(): i32 { return 0; }", "", []int32{2322}},
