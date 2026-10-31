@@ -62,10 +62,6 @@ func (c *Checker) ssc_loadPrelude() (symbolByBrand map[*ast.Symbol]*ast.Symbol, 
 			continue
 		}
 		if packageName, ok := packageJson.Name.GetValue(); ok && packageName == "syscript" {
-			if name == "f64" {
-				symbolByName[name] = symbol
-				continue
-			}
 			brand := ssc_getSscBrandTypeLiteral(declaration, name)
 			if brand == nil {
 				continue
@@ -94,23 +90,33 @@ func ssc_getSscBrandTypeLiteral(declaration *ast.Node, expectedName string) *ast
 	return nil
 }
 
-func (c *Checker) ssc_symbol(t *Type) *ast.Symbol {
-	symbolByBrand, symbolByName := c.ssc_loadPrelude()
+func (c *Checker) ssc_type(t *Type) *Type {
+	symbolByBrand, _ := c.ssc_loadPrelude()
 	if t.flags&(TypeFlagsNumber|TypeFlagsNumberLiteral) != 0 {
-		return symbolByName["f64"]
+		return c.numberType
 	}
 	if t.flags&TypeFlagsIntersection == 0 {
 		return nil
 	}
-	if f64Symbol := symbolByName["f64"]; f64Symbol != nil && t == c.getDeclaredTypeOfSymbol(f64Symbol) {
-		return f64Symbol
-	}
 	for memberType := range slices.Values(t.Types()) {
 		if symbol := symbolByBrand[memberType.symbol]; symbol != nil {
-			return symbol
+			return c.getDeclaredTypeOfSymbol(symbol)
 		}
 	}
 	return nil
+}
+
+func (c *Checker) ssc_name(t *Type) string {
+	if t == c.numberType {
+		return "number"
+	}
+	_, symbolByName := c.ssc_loadPrelude()
+	for name, symbol := range symbolByName {
+		if t == c.getDeclaredTypeOfSymbol(symbol) {
+			return name
+		}
+	}
+	panic("not a syscript number type: " + c.TypeToString(t))
 }
 
 func (c *Checker) ssc_IsEnabled() bool {
@@ -122,27 +128,27 @@ func (c *Checker) ssc_CommonType(types ...*Type) (isSsc bool, commonType *Type) 
 	if !c.ssc_IsEnabled() {
 		return false, nil
 	}
-	var symbols []*ast.Symbol
+	var sscTypes []*Type
 	for t := range slices.Values(types) {
 		memberTypes := []*Type{t}
 		if t.flags&TypeFlagsUnion != 0 {
 			memberTypes = t.Types()
 		}
 		for memberType := range slices.Values(memberTypes) {
-			symbol := c.ssc_symbol(memberType)
-			if symbol == nil {
+			sscType := c.ssc_type(memberType)
+			if sscType == nil {
 				return false, nil
 			}
-			symbols = append(symbols, symbol)
+			sscTypes = append(sscTypes, sscType)
 		}
 	}
-	if len(symbols) == 0 {
+	if len(sscTypes) == 0 {
 		return false, nil
 	}
-	if slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return symbol != symbols[0] }) {
+	if slices.ContainsFunc(sscTypes, func(sscType *Type) bool { return sscType != sscTypes[0] }) {
 		return true, nil
 	}
-	return true, c.getDeclaredTypeOfSymbol(symbols[0])
+	return true, sscTypes[0]
 }
 
 func (c *Checker) ssc_UnaryResultTypeOrReportError(operandType *Type, operator ast.Kind, errorNode *ast.Node) *Type {
@@ -154,9 +160,9 @@ func (c *Checker) ssc_UnaryResultTypeOrReportError(operandType *Type, operator a
 		return nil
 	}
 	if result != nil {
-		name := c.ssc_symbol(result).Name()
+		name := c.ssc_name(result)
 		if operator == ast.KindMinusToken && slices.Contains(ssc_unsignedTypes, name) ||
-			name == "f32" && slices.Contains(ssc_bitwiseOperators, operator) {
+			slices.Contains(ssc_floatTypes, name) && slices.Contains(ssc_bitwiseOperators, operator) {
 			result = nil
 		}
 	}
@@ -189,8 +195,8 @@ func (c *Checker) ssc_BinaryResultTypeOrReportError(left *Type, right *Type, ope
 		return nil
 	}
 	if result != nil {
-		name := c.ssc_symbol(result).Name()
-		if name == "f32" && slices.Contains(ssc_bitwiseOperators, operator) {
+		name := c.ssc_name(result)
+		if slices.Contains(ssc_floatTypes, name) && slices.Contains(ssc_bitwiseOperators, operator) {
 			result = nil
 		}
 	}

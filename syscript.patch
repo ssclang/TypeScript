@@ -246,10 +246,10 @@ index 73de52e18d..732e2734e9 100644
  		if operator == ast.KindBarBarEqualsToken {
 diff --git a/tsc/internal/checker/ssc.go b/tsc/internal/checker/ssc.go
 new file mode 100644
-index 0000000000..7de3288bf5
+index 0000000000..778fe5dc70
 --- /dev/null
 +++ b/tsc/internal/checker/ssc.go
-@@ -0,0 +1,220 @@
+@@ -0,0 +1,226 @@
 +package checker
 +
 +import (
@@ -314,10 +314,6 @@ index 0000000000..7de3288bf5
 +			continue
 +		}
 +		if packageName, ok := packageJson.Name.GetValue(); ok && packageName == "syscript" {
-+			if name == "f64" {
-+				symbolByName[name] = symbol
-+				continue
-+			}
 +			brand := ssc_getSscBrandTypeLiteral(declaration, name)
 +			if brand == nil {
 +				continue
@@ -346,23 +342,33 @@ index 0000000000..7de3288bf5
 +	return nil
 +}
 +
-+func (c *Checker) ssc_symbol(t *Type) *ast.Symbol {
-+	symbolByBrand, symbolByName := c.ssc_loadPrelude()
++func (c *Checker) ssc_type(t *Type) *Type {
++	symbolByBrand, _ := c.ssc_loadPrelude()
 +	if t.flags&(TypeFlagsNumber|TypeFlagsNumberLiteral) != 0 {
-+		return symbolByName["f64"]
++		return c.numberType
 +	}
 +	if t.flags&TypeFlagsIntersection == 0 {
 +		return nil
 +	}
-+	if f64Symbol := symbolByName["f64"]; f64Symbol != nil && t == c.getDeclaredTypeOfSymbol(f64Symbol) {
-+		return f64Symbol
-+	}
 +	for memberType := range slices.Values(t.Types()) {
 +		if symbol := symbolByBrand[memberType.symbol]; symbol != nil {
-+			return symbol
++			return c.getDeclaredTypeOfSymbol(symbol)
 +		}
 +	}
 +	return nil
++}
++
++func (c *Checker) ssc_name(t *Type) string {
++	if t == c.numberType {
++		return "number"
++	}
++	_, symbolByName := c.ssc_loadPrelude()
++	for name, symbol := range symbolByName {
++		if t == c.getDeclaredTypeOfSymbol(symbol) {
++			return name
++		}
++	}
++	panic("not a syscript number type: " + c.TypeToString(t))
 +}
 +
 +func (c *Checker) ssc_IsEnabled() bool {
@@ -374,27 +380,27 @@ index 0000000000..7de3288bf5
 +	if !c.ssc_IsEnabled() {
 +		return false, nil
 +	}
-+	var symbols []*ast.Symbol
++	var sscTypes []*Type
 +	for t := range slices.Values(types) {
 +		memberTypes := []*Type{t}
 +		if t.flags&TypeFlagsUnion != 0 {
 +			memberTypes = t.Types()
 +		}
 +		for memberType := range slices.Values(memberTypes) {
-+			symbol := c.ssc_symbol(memberType)
-+			if symbol == nil {
++			sscType := c.ssc_type(memberType)
++			if sscType == nil {
 +				return false, nil
 +			}
-+			symbols = append(symbols, symbol)
++			sscTypes = append(sscTypes, sscType)
 +		}
 +	}
-+	if len(symbols) == 0 {
++	if len(sscTypes) == 0 {
 +		return false, nil
 +	}
-+	if slices.ContainsFunc(symbols, func(symbol *ast.Symbol) bool { return symbol != symbols[0] }) {
++	if slices.ContainsFunc(sscTypes, func(sscType *Type) bool { return sscType != sscTypes[0] }) {
 +		return true, nil
 +	}
-+	return true, c.getDeclaredTypeOfSymbol(symbols[0])
++	return true, sscTypes[0]
 +}
 +
 +func (c *Checker) ssc_UnaryResultTypeOrReportError(operandType *Type, operator ast.Kind, errorNode *ast.Node) *Type {
@@ -406,9 +412,9 @@ index 0000000000..7de3288bf5
 +		return nil
 +	}
 +	if result != nil {
-+		name := c.ssc_symbol(result).Name()
++		name := c.ssc_name(result)
 +		if operator == ast.KindMinusToken && slices.Contains(ssc_unsignedTypes, name) ||
-+			name == "f32" && slices.Contains(ssc_bitwiseOperators, operator) {
++			slices.Contains(ssc_floatTypes, name) && slices.Contains(ssc_bitwiseOperators, operator) {
 +			result = nil
 +		}
 +	}
@@ -441,8 +447,8 @@ index 0000000000..7de3288bf5
 +		return nil
 +	}
 +	if result != nil {
-+		name := c.ssc_symbol(result).Name()
-+		if name == "f32" && slices.Contains(ssc_bitwiseOperators, operator) {
++		name := c.ssc_name(result)
++		if slices.Contains(ssc_floatTypes, name) && slices.Contains(ssc_bitwiseOperators, operator) {
 +			result = nil
 +		}
 +	}
@@ -472,10 +478,10 @@ index 0000000000..7de3288bf5
 +}
 diff --git a/tsc/internal/checker/ssc_test.go b/tsc/internal/checker/ssc_test.go
 new file mode 100644
-index 0000000000..24d77635db
+index 0000000000..808239531f
 --- /dev/null
 +++ b/tsc/internal/checker/ssc_test.go
-@@ -0,0 +1,366 @@
+@@ -0,0 +1,368 @@
 +package checker_test
 +
 +import (
@@ -508,7 +514,7 @@ index 0000000000..24d77635db
 +  type u32 = number & { readonly [ssc]: 'u32' };
 +  type u64 = number & { readonly [ssc]: 'u64' };
 +  type f32 = number & { readonly [ssc]: 'f32' };
-+  type f64 = number & {};
++  type f64 = number & { readonly [ssc]: 'f64' };
 +  type char = number & { readonly [ssc]: 'char' };
 +  interface Array<T> { length: u64; [n: number]: T; [n: i64]: T; [n: u64]: T }
 +  interface Boolean {}
@@ -620,13 +626,13 @@ index 0000000000..24d77635db
 +		{"same type", "const r = a32 + b32;", "i32", nil},
 +		{"different types", "const r = a32 + a64;", "any", []int32{2365}},
 +		{"literal is a number", "const r = a32 + 1;", "any", []int32{2365}},
-+		{"literal with f64", "const r = fa64 + 1;", "f64", nil},
-+		{"number with f64", "const r = fa64 + n;", "f64", nil},
++		{"literal with f64", "const r = fa64 + 1;", "any", []int32{2365}},
++		{"number with f64", "const r = fa64 + n;", "any", []int32{2365}},
 +		{"f64 with f64", "const r = fa64 * fa64;", "f64", nil},
 +		{"number with i32", "const r = a32 + n;", "any", []int32{2365}},
-+		{"literals only", "const r = 1 + 2;", "f64", nil},
++		{"literals only", "const r = 1 + 2;", "number", nil},
 +		{"literal variable stays a literal", "const r = 1;", "1", nil},
-+		{"number only", "const r = n + n;", "f64", nil},
++		{"number only", "const r = n + n;", "number", nil},
 +		{"constructor result", "declare function i32(v: number): i32;\nconst r = a32 + i32(1);", "i32", nil},
 +		{"same type union", "const r = (c ? a32 : b32) + a32;", "i32", nil},
 +		{"mixed union", "const r = (c ? a32 : a64) + a32;", "any", []int32{2365}},
@@ -642,17 +648,19 @@ index 0000000000..24d77635db
 +		{"shift", "const r = a32 << b32;", "i32", nil},
 +		{"unsigned shift", "const r = ua32 >>> ua32;", "u32", nil},
 +		{"bitwise on float", "const r = fa32 & fa32;", "any", []int32{2365}},
-+		{"bitwise on number like JS", "const r = n | 0;", "f64", nil},
-+		{"bitwise on f64", "const r = fa64 & fa64;", "f64", nil},
-+		{"shift on f64", "const r = fa64 >>> 0;", "f64", nil},
-+		{"enum bitwise", "const r = E.A | E.B;", "f64", nil},
++		{"bitwise on number like JS", "const r = n | 0;", "number", nil},
++		{"bitwise on f64", "const r = fa64 & fa64;", "any", []int32{2365}},
++		{"shift on f64", "const r = fa64 >>> fa64;", "any", []int32{2365}},
++		{"enum bitwise", "const r = E.A | E.B;", "number", nil},
 +		{"unary minus", "const r = -a32;", "i32", nil},
 +		{"unary minus on unsigned", "const r = -ua8;", "any", []int32{2736}},
 +		{"unary minus on f32", "const r = -fa32;", "f32", nil},
 +		{"unary plus keeps type", "const r = +a32;", "i32", nil},
 +		{"unary bitwise", "const r = ~ua8;", "u8", nil},
 +		{"unary bitwise on f32", "const r = ~fa32;", "any", []int32{2736}},
-+		{"unary bitwise on f64", "const r = ~fa64;", "f64", nil},
++		{"unary bitwise on f64", "const r = ~fa64;", "any", []int32{2736}},
++		{"unary minus on number", "const r = -n;", "number", nil},
++		{"unary bitwise on number", "const r = ~n;", "number", nil},
 +		{"prefix increment", "const r = ++a64;", "i64", nil},
 +		{"postfix increment", "const r = a32++;", "i32", nil},
 +		{"compound assignment", "a32 += b32;", "", nil},
@@ -661,7 +669,7 @@ index 0000000000..24d77635db
 +		{"relational", "const r = a32 < b32;", "boolean", nil},
 +		{"relational different types", "const r = a32 < a64;", "boolean", []int32{2365}},
 +		{"relational literal", "const r = a32 < 1;", "boolean", []int32{2365}},
-+		{"relational f64 literal", "const r = fa64 < 1;", "boolean", nil},
++		{"relational f64 literal", "const r = fa64 < 1;", "boolean", []int32{2365}},
 +		{"equality same type", "const r = a32 === b32;", "boolean", nil},
 +		{"equality different types", "const r = a32 === a64;", "boolean", []int32{2367}},
 +		{"array length", "const r = items.length - ua64;", "u64", nil},
@@ -694,9 +702,9 @@ index 0000000000..24d77635db
 +		{"no widening", "const r: i64 = a32;", "i64", []int32{2322}},
 +		{"no narrowing", "const r: i32 = a64;", "i32", []int32{2322}},
 +		{"literal assignment", "const r: i32 = 1;", "i32", []int32{2322}},
-+		{"literal to f64", "const r: f64 = 1.5;", "f64", nil},
++		{"literal to f64", "const r: f64 = 1.5;", "f64", []int32{2322}},
 +		{"number assignment", "const r: i32 = n;", "i32", []int32{2322}},
-+		{"number to f64", "const r: f64 = n;", "f64", nil},
++		{"number to f64", "const r: f64 = n;", "f64", []int32{2322}},
 +		{"f64 to number", "const r: number = fa64;", "number", nil},
 +		{"literal argument", "declare function take(v: i32): void;\ntake(1);", "", []int32{2345}},
 +		{"literal return", "function f(): i32 { return 0; }", "", []int32{2322}},
