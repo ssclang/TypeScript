@@ -138,7 +138,7 @@ index 0000000000..db1982509b
 +	return C.CBytes(payload)
 +}
 diff --git a/tsc/internal/checker/checker.go b/tsc/internal/checker/checker.go
-index 73de52e18d..0adf3e321d 100644
+index 73de52e18d..732e2734e9 100644
 --- a/tsc/internal/checker/checker.go
 +++ b/tsc/internal/checker/checker.go
 @@ -922,6 +922,10 @@ type Checker struct {
@@ -244,34 +244,12 @@ index 73de52e18d..0adf3e321d 100644
  			resultType = c.getUnionTypeEx([]*Type{c.GetNonNullableType(c.removeDefinitelyFalsyTypes(leftType)), rightType}, UnionReductionSubtype, nil, nil)
  		}
  		if operator == ast.KindBarBarEqualsToken {
-@@ -13055,6 +13084,9 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
- }
- 
- func (c *Checker) checkArithmeticOperandType(operand *ast.Node, t *Type, diagnostic *diagnostics.Message, isAwaitValid bool) bool {
-+	if isSsc, _ := c.ssc_CommonType(t); isSsc { // syscript
-+		return true
-+	}
- 	if !c.isTypeAssignableTo(t, c.numberOrBigIntType) {
- 		var awaitedType *Type
- 		if isAwaitValid {
-@@ -28230,6 +28262,11 @@ func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict
- 	if source.flags&kind != 0 {
- 		return true
- 	}
-+	if kind&TypeFlagsNumberLike != 0 { // syscript
-+		if isSsc, _ := c.ssc_CommonType(source); isSsc {
-+			return true
-+		}
-+	}
- 	if strict && source.flags&(TypeFlagsAnyOrUnknown|TypeFlagsVoid|TypeFlagsUndefined|TypeFlagsNull) != 0 {
- 		return false
- 	}
 diff --git a/tsc/internal/checker/ssc.go b/tsc/internal/checker/ssc.go
 new file mode 100644
-index 0000000000..3975ab4297
+index 0000000000..7de3288bf5
 --- /dev/null
 +++ b/tsc/internal/checker/ssc.go
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,220 @@
 +package checker
 +
 +import (
@@ -286,18 +264,11 @@ index 0000000000..3975ab4297
 +
 +var ssc_signedTypes = []string{"i8", "i16", "i32", "i64"}
 +
-+var ssc_unsignedTypes = []string{"u8", "u16", "u32", "u64"}
++var ssc_unsignedTypes = []string{"u8", "u16", "u32", "u64", "char"}
 +
 +var ssc_floatTypes = []string{"f32", "f64"}
 +
-+var ssc_types = slices.Concat(ssc_signedTypes, ssc_unsignedTypes, ssc_floatTypes, []string{"char"})
-+
-+var ssc_relationalOperators = []ast.Kind{
-+	ast.KindGreaterThanEqualsToken,
-+	ast.KindGreaterThanToken,
-+	ast.KindLessThanEqualsToken,
-+	ast.KindLessThanToken,
-+}
++var ssc_types = slices.Concat(ssc_signedTypes, ssc_unsignedTypes, ssc_floatTypes)
 +
 +var ssc_bitwiseOperators = []ast.Kind{
 +	ast.KindAmpersandEqualsToken,
@@ -436,9 +407,8 @@ index 0000000000..3975ab4297
 +	}
 +	if result != nil {
 +		name := c.ssc_symbol(result).Name()
-+		if name == "char" ||
-+			operator == ast.KindMinusToken && slices.Contains(ssc_unsignedTypes, name) ||
-+			slices.Contains(ssc_floatTypes, name) && slices.Contains(ssc_bitwiseOperators, operator) {
++		if operator == ast.KindMinusToken && slices.Contains(ssc_unsignedTypes, name) ||
++			name == "f32" && slices.Contains(ssc_bitwiseOperators, operator) {
 +			result = nil
 +		}
 +	}
@@ -472,8 +442,7 @@ index 0000000000..3975ab4297
 +	}
 +	if result != nil {
 +		name := c.ssc_symbol(result).Name()
-+		if name == "char" && !slices.Contains(ssc_relationalOperators, operator) ||
-+			slices.Contains(ssc_floatTypes, name) && slices.Contains(ssc_bitwiseOperators, operator) {
++		if name == "f32" && slices.Contains(ssc_bitwiseOperators, operator) {
 +			result = nil
 +		}
 +	}
@@ -503,10 +472,10 @@ index 0000000000..3975ab4297
 +}
 diff --git a/tsc/internal/checker/ssc_test.go b/tsc/internal/checker/ssc_test.go
 new file mode 100644
-index 0000000000..65ba5a0f4d
+index 0000000000..24d77635db
 --- /dev/null
 +++ b/tsc/internal/checker/ssc_test.go
-@@ -0,0 +1,361 @@
+@@ -0,0 +1,366 @@
 +package checker_test
 +
 +import (
@@ -673,13 +642,17 @@ index 0000000000..65ba5a0f4d
 +		{"shift", "const r = a32 << b32;", "i32", nil},
 +		{"unsigned shift", "const r = ua32 >>> ua32;", "u32", nil},
 +		{"bitwise on float", "const r = fa32 & fa32;", "any", []int32{2365}},
-+		{"bitwise on number", "const r = n | 0;", "any", []int32{2365}},
++		{"bitwise on number like JS", "const r = n | 0;", "f64", nil},
++		{"bitwise on f64", "const r = fa64 & fa64;", "f64", nil},
++		{"shift on f64", "const r = fa64 >>> 0;", "f64", nil},
++		{"enum bitwise", "const r = E.A | E.B;", "f64", nil},
 +		{"unary minus", "const r = -a32;", "i32", nil},
 +		{"unary minus on unsigned", "const r = -ua8;", "any", []int32{2736}},
 +		{"unary minus on f32", "const r = -fa32;", "f32", nil},
 +		{"unary plus keeps type", "const r = +a32;", "i32", nil},
 +		{"unary bitwise", "const r = ~ua8;", "u8", nil},
-+		{"unary bitwise on float", "const r = ~fa32;", "any", []int32{2736}},
++		{"unary bitwise on f32", "const r = ~fa32;", "any", []int32{2736}},
++		{"unary bitwise on f64", "const r = ~fa64;", "f64", nil},
 +		{"prefix increment", "const r = ++a64;", "i64", nil},
 +		{"postfix increment", "const r = a32++;", "i32", nil},
 +		{"compound assignment", "a32 += b32;", "", nil},
@@ -850,10 +823,11 @@ index 0000000000..65ba5a0f4d
 +		{"comparison between chars", "const r = ch === ch2;", "boolean", nil},
 +		{"ordering between chars", "const r = ch < ch2;", "boolean", nil},
 +		{"conditional keeps char", "const r = c ? ch : ch2;", "char", nil},
-+		{"arithmetic", "const r = ch + ch2;", "any", []int32{2365}},
-+		{"bitwise", "const r = ch & ch2;", "any", []int32{2365}},
-+		{"negation", "const r = -ch;", "any", []int32{2736}},
-+		{"increment", "ch++;\nconst r = 0;", "", []int32{2736}},
++		{"arithmetic like an unsigned integer", "const r = ch + ch2;", "char", nil},
++		{"bitwise like an unsigned integer", "const r = ch & ch2;", "char", nil},
++		{"negation like an unsigned integer", "const r = -ch;", "any", []int32{2736}},
++		{"increment", "const r = ch++;", "char", nil},
++		{"no mixing with u32", "const r = ch + ua32;", "any", []int32{2365}},
 +		{"string literal is not a char", "const r: char = 'A';", "char", []int32{2322}},
 +		{"no widening to u32", "const r: u32 = ch;", "u32", []int32{2322}},
 +	}

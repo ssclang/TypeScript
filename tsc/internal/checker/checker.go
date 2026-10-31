@@ -13084,9 +13084,6 @@ func (c *Checker) getSuggestedBooleanOperator(operator ast.Kind) ast.Kind {
 }
 
 func (c *Checker) checkArithmeticOperandType(operand *ast.Node, t *Type, diagnostic *diagnostics.Message, isAwaitValid bool) bool {
-	if isSsc, _ := c.ssc_CommonType(t); isSsc { // syscript
-		return true
-	}
 	if !c.isTypeAssignableTo(t, c.numberOrBigIntType) {
 		var awaitedType *Type
 		if isAwaitValid {
@@ -28261,11 +28258,6 @@ func (c *Checker) isTypeAssignableToKind(source *Type, kind TypeFlags) bool {
 func (c *Checker) isTypeAssignableToKindEx(source *Type, kind TypeFlags, strict bool) bool {
 	if source.flags&kind != 0 {
 		return true
-	}
-	if kind&TypeFlagsNumberLike != 0 { // syscript
-		if isSsc, _ := c.ssc_CommonType(source); isSsc {
-			return true
-		}
 	}
 	if strict && source.flags&(TypeFlagsAnyOrUnknown|TypeFlagsVoid|TypeFlagsUndefined|TypeFlagsNull) != 0 {
 		return false

@@ -12,18 +12,11 @@ import (
 
 var ssc_signedTypes = []string{"i8", "i16", "i32", "i64"}
 
-var ssc_unsignedTypes = []string{"u8", "u16", "u32", "u64"}
+var ssc_unsignedTypes = []string{"u8", "u16", "u32", "u64", "char"}
 
 var ssc_floatTypes = []string{"f32", "f64"}
 
-var ssc_types = slices.Concat(ssc_signedTypes, ssc_unsignedTypes, ssc_floatTypes, []string{"char"})
-
-var ssc_relationalOperators = []ast.Kind{
-	ast.KindGreaterThanEqualsToken,
-	ast.KindGreaterThanToken,
-	ast.KindLessThanEqualsToken,
-	ast.KindLessThanToken,
-}
+var ssc_types = slices.Concat(ssc_signedTypes, ssc_unsignedTypes, ssc_floatTypes)
 
 var ssc_bitwiseOperators = []ast.Kind{
 	ast.KindAmpersandEqualsToken,
@@ -162,9 +155,8 @@ func (c *Checker) ssc_UnaryResultTypeOrReportError(operandType *Type, operator a
 	}
 	if result != nil {
 		name := c.ssc_symbol(result).Name()
-		if name == "char" ||
-			operator == ast.KindMinusToken && slices.Contains(ssc_unsignedTypes, name) ||
-			slices.Contains(ssc_floatTypes, name) && slices.Contains(ssc_bitwiseOperators, operator) {
+		if operator == ast.KindMinusToken && slices.Contains(ssc_unsignedTypes, name) ||
+			name == "f32" && slices.Contains(ssc_bitwiseOperators, operator) {
 			result = nil
 		}
 	}
@@ -198,8 +190,7 @@ func (c *Checker) ssc_BinaryResultTypeOrReportError(left *Type, right *Type, ope
 	}
 	if result != nil {
 		name := c.ssc_symbol(result).Name()
-		if name == "char" && !slices.Contains(ssc_relationalOperators, operator) ||
-			slices.Contains(ssc_floatTypes, name) && slices.Contains(ssc_bitwiseOperators, operator) {
+		if name == "f32" && slices.Contains(ssc_bitwiseOperators, operator) {
 			result = nil
 		}
 	}
