@@ -2655,9 +2655,6 @@ func (r *Relater) isRelatedToEx(originalSource *Type, originalTarget *Type, recu
 	if source == target {
 		return TernaryTrue
 	}
-	if isSsc, result := r.ssc_RelatedOrReportError(originalSource, originalTarget, source, target, reportErrors, headMessage); isSsc { // syscript
-		return result
-	}
 	if r.relation == r.c.identityRelation {
 		if source.flags != target.flags {
 			return TernaryFalse
@@ -2691,9 +2688,6 @@ func (r *Relater) isRelatedToEx(originalSource *Type, originalTarget *Type, recu
 			target = r.c.getNormalizedType(candidate /*writing*/, true)
 			if source == target {
 				return TernaryTrue
-			}
-			if isSsc, result := r.ssc_RelatedOrReportError(originalSource, originalTarget, source, target, reportErrors, headMessage); isSsc { // syscript
-				return result
 			}
 		}
 	}
