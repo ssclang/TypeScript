@@ -32,6 +32,7 @@ declare global {
   type f32 = number & { readonly [ssc]: 'f32' };
   type f64 = number & { readonly [ssc]: 'f64' };
   type char = number & { readonly [ssc]: 'char' };
+  interface bstring { readonly [ssc]: 'bstring' }
   interface Array<T> { length: u64; [n: number]: T }
   interface Boolean {}
   interface CallableFunction {}
@@ -153,6 +154,15 @@ func TestSscOperators(t *testing.T) {
 		{"same type union", "const r = (c ? a32 : b32) + a32;", "i32", nil},
 		{"mixed union", "const r = (c ? a32 : a64) + a32;", "any", []int32{2365}},
 		{"string concatenation", `const r = a32 + "s";`, "string", nil},
+		{"bstring concatenation", "declare const bs: bstring;\nconst r = bs + bs;", "bstring", nil},
+		{"bstring compound concatenation", "declare let bs: bstring;\nbs += bs;", "", nil},
+		{"bstring with string", "declare const bs: bstring;\nconst r = bs + items[0];", "any", []int32{2365}},
+		{"string with bstring", "declare const bs: bstring;\nconst r = items[0] + bs;", "any", []int32{2365}},
+		{"bstring with literal", `declare const bs: bstring;` + "\n" + `const r = bs + "s";`, "any", []int32{2365}},
+		{"bstring with number", "declare const bs: bstring;\nconst r = bs + a32;", "any", []int32{2365}},
+		{"bstring compound with string", "declare let bs: bstring;\nbs += items[0];", "", []int32{2365}},
+		{"string with string", "const r = items[0] + items[1];", "string", nil},
+		{"bstring template", "declare const bs: bstring;\nconst r = `${bs}`;", "string", nil},
 		{"template literal", "const r = `${a64}`;", "string", nil},
 		{"bigint operand", "const r = a32 + 1n;", "any", []int32{2365}},
 		{"boolean operand", "const r = a32 + c;", "any", []int32{2365}},

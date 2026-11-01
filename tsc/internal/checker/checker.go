@@ -12689,7 +12689,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
 			rightType = c.checkNonNullType(rightType, right)
 		}
 		var resultType *Type
-		if c.isTypeAssignableToKindEx(leftType, TypeFlagsNumberLike, true /*strict*/) && c.isTypeAssignableToKindEx(rightType, TypeFlagsNumberLike, true /*strict*/) {
+		if ssc_type := c.ssc_ConcatResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
+			resultType = ssc_type
+		} else if c.isTypeAssignableToKindEx(leftType, TypeFlagsNumberLike, true /*strict*/) && c.isTypeAssignableToKindEx(rightType, TypeFlagsNumberLike, true /*strict*/) {
 			// Operands of an enum type are treated as having the primitive type Number.
 			// If both operands are of the Number primitive type, the result is of the Number primitive type.
 			resultType = c.numberType

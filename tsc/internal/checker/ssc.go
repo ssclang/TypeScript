@@ -46,34 +46,49 @@ func (c *Checker) ssc_loadPrelude() (symbolByBrand map[*ast.Symbol]*ast.Symbol, 
 			continue
 		}
 		declaration := ast.GetDeclarationOfKind(symbol, ast.KindTypeAliasDeclaration)
-		if declaration == nil {
+		if declaration == nil || !c.ssc_isPreludeDeclaration(declaration) {
 			continue
 		}
-		sourceFile := ast.GetSourceFileOfNode(declaration)
-		if sourceFile == nil || sourceFile.FileName().BaseName() != "prelude.d.ts" {
+		brand := ssc_getSscBrandTypeLiteral(declaration, name)
+		if brand == nil {
 			continue
 		}
-		packageJsonDirectory := c.program.GetSourceFileMetaData(sourceFile.PathKey()).PackageJsonDirectory
-		if packageJsonDirectory == "" {
-			continue
-		}
-		packageJson := c.program.GetPackageJsonInfo(packageJsonDirectory.ResolveFile("package.json")).GetContents()
-		if packageJson == nil {
-			continue
-		}
-		if packageName, ok := packageJson.Name.GetValue(); ok && packageName == "syscript" {
-			brand := ssc_getSscBrandTypeLiteral(declaration, name)
-			if brand == nil {
-				continue
-			}
-			symbolByBrand[brand.Symbol()] = symbol
-			symbolByName[name] = symbol
-		}
+		symbolByBrand[brand.Symbol()] = symbol
+		symbolByName[name] = symbol
 	}
 	c.ssc_PreludeSymbolByBrand = symbolByBrand
 	c.ssc_PreludeSymbolByName = symbolByName
 	c.ssc_Enabled = len(symbolByName) == len(ssc_types)
 	return symbolByBrand, symbolByName
+}
+
+func (c *Checker) ssc_isPreludeDeclaration(declaration *ast.Node) bool {
+	sourceFile := ast.GetSourceFileOfNode(declaration)
+	if sourceFile == nil || sourceFile.FileName().BaseName() != "prelude.d.ts" {
+		return false
+	}
+	packageJsonDirectory := c.program.GetSourceFileMetaData(sourceFile.PathKey()).PackageJsonDirectory
+	if packageJsonDirectory == "" {
+		return false
+	}
+	packageJson := c.program.GetPackageJsonInfo(packageJsonDirectory.ResolveFile("package.json")).GetContents()
+	if packageJson == nil {
+		return false
+	}
+	packageName, ok := packageJson.Name.GetValue()
+	return ok && packageName == "syscript"
+}
+
+func (c *Checker) ssc_bstringType() *Type {
+	symbol := c.getGlobalSymbol("bstring", ast.SymbolFlagsInterface, nil)
+	if symbol == nil {
+		return nil
+	}
+	declaration := ast.GetDeclarationOfKind(symbol, ast.KindInterfaceDeclaration)
+	if declaration == nil || !c.ssc_isPreludeDeclaration(declaration) {
+		return nil
+	}
+	return c.getDeclaredTypeOfSymbol(symbol)
 }
 
 func ssc_getSscBrandTypeLiteral(declaration *ast.Node, expectedName string) *ast.Node {
@@ -226,6 +241,18 @@ func (c *Checker) ssc_BinaryResultTypeOrReportError(left *Type, right *Type, ope
 		return c.errorType
 	}
 	return result
+}
+
+func (c *Checker) ssc_ConcatResultTypeOrReportError(left *Type, right *Type, operator ast.Kind, errorNode *ast.Node) *Type {
+	bstringType := c.ssc_bstringType()
+	if bstringType == nil || left != bstringType && right != bstringType {
+		return nil
+	}
+	if left != right {
+		c.reportOperatorError(left, operator, right, errorNode, nil)
+		return c.errorType
+	}
+	return bstringType
 }
 
 func (c *Checker) ssc_LogicalResultTypeOrReportError(left *Type, right *Type, operator ast.Kind, errorNode *ast.Node) *Type {

@@ -138,7 +138,7 @@ index 0000000000..db1982509b
 +	return C.CBytes(payload)
 +}
 diff --git a/tsc/internal/checker/checker.go b/tsc/internal/checker/checker.go
-index 73de52e18d..732e2734e9 100644
+index 73de52e18d..b6274c4e43 100644
 --- a/tsc/internal/checker/checker.go
 +++ b/tsc/internal/checker/checker.go
 @@ -922,6 +922,10 @@ type Checker struct {
@@ -192,7 +192,14 @@ index 73de52e18d..732e2734e9 100644
  		} else if c.bothAreBigIntLike(leftType, rightType) {
  			switch operator {
  			case ast.KindGreaterThanGreaterThanGreaterThanToken, ast.KindGreaterThanGreaterThanGreaterThanEqualsToken:
-@@ -12677,6 +12693,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12673,10 +12689,15 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+ 			rightType = c.checkNonNullType(rightType, right)
+ 		}
+ 		var resultType *Type
+-		if c.isTypeAssignableToKindEx(leftType, TypeFlagsNumberLike, true /*strict*/) && c.isTypeAssignableToKindEx(rightType, TypeFlagsNumberLike, true /*strict*/) {
++		if ssc_type := c.ssc_ConcatResultTypeOrReportError(leftType, rightType, operator, errorNode); ssc_type != nil { // syscript
++			resultType = ssc_type
++		} else if c.isTypeAssignableToKindEx(leftType, TypeFlagsNumberLike, true /*strict*/) && c.isTypeAssignableToKindEx(rightType, TypeFlagsNumberLike, true /*strict*/) {
  			// Operands of an enum type are treated as having the primitive type Number.
  			// If both operands are of the Number primitive type, the result is of the Number primitive type.
  			resultType = c.numberType
@@ -202,7 +209,7 @@ index 73de52e18d..732e2734e9 100644
  		} else if c.isTypeAssignableToKindEx(leftType, TypeFlagsBigIntLike, true /*strict*/) && c.isTypeAssignableToKindEx(rightType, TypeFlagsBigIntLike, true /*strict*/) {
  			// If both operands are of the BigInt primitive type, the result is of the BigInt primitive type.
  			resultType = c.bigintType
-@@ -12690,6 +12709,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12690,6 +12711,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  				resultType = c.errorType
  			} else {
  				resultType = c.anyType
@@ -212,7 +219,7 @@ index 73de52e18d..732e2734e9 100644
  			}
  		}
  		// Symbols are not allowed at all in arithmetic expressions
-@@ -12712,6 +12734,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12712,6 +12736,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  		}
  		return resultType
  	case ast.KindLessThanToken, ast.KindGreaterThanToken, ast.KindLessThanEqualsToken, ast.KindGreaterThanEqualsToken:
@@ -222,7 +229,7 @@ index 73de52e18d..732e2734e9 100644
  		if c.checkForDisallowedESSymbolOperand(left, right, leftType, rightType, operator) {
  			leftType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(leftType, left))
  			rightType = c.getBaseTypeOfLiteralTypeForComparison(c.checkNonNullType(rightType, right))
-@@ -12748,7 +12773,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12748,7 +12775,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  		return c.checkInExpression(left, right, leftType, rightType)
  	case ast.KindAmpersandAmpersandToken, ast.KindAmpersandAmpersandEqualsToken:
  		resultType := leftType
@@ -233,7 +240,7 @@ index 73de52e18d..732e2734e9 100644
  			t := leftType
  			if !c.strictNullChecks {
  				t = c.getBaseTypeOfLiteralType(rightType)
-@@ -12761,7 +12788,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
+@@ -12761,7 +12790,9 @@ func (c *Checker) checkBinaryLikeExpression(left *ast.Node, operatorToken *ast.N
  		return resultType
  	case ast.KindBarBarToken, ast.KindBarBarEqualsToken:
  		resultType := leftType
@@ -273,10 +280,10 @@ index a9bc484fef..b65d4ff8b7 100644
  	// as we break down the _target_ union first, _then_ get the source constraint - so for every
 diff --git a/tsc/internal/checker/ssc.go b/tsc/internal/checker/ssc.go
 new file mode 100644
-index 0000000000..ddd5bc30f1
+index 0000000000..73e8f0ca5a
 --- /dev/null
 +++ b/tsc/internal/checker/ssc.go
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,274 @@
 +package checker
 +
 +import (
@@ -325,34 +332,49 @@ index 0000000000..ddd5bc30f1
 +			continue
 +		}
 +		declaration := ast.GetDeclarationOfKind(symbol, ast.KindTypeAliasDeclaration)
-+		if declaration == nil {
++		if declaration == nil || !c.ssc_isPreludeDeclaration(declaration) {
 +			continue
 +		}
-+		sourceFile := ast.GetSourceFileOfNode(declaration)
-+		if sourceFile == nil || sourceFile.FileName().BaseName() != "prelude.d.ts" {
++		brand := ssc_getSscBrandTypeLiteral(declaration, name)
++		if brand == nil {
 +			continue
 +		}
-+		packageJsonDirectory := c.program.GetSourceFileMetaData(sourceFile.PathKey()).PackageJsonDirectory
-+		if packageJsonDirectory == "" {
-+			continue
-+		}
-+		packageJson := c.program.GetPackageJsonInfo(packageJsonDirectory.ResolveFile("package.json")).GetContents()
-+		if packageJson == nil {
-+			continue
-+		}
-+		if packageName, ok := packageJson.Name.GetValue(); ok && packageName == "syscript" {
-+			brand := ssc_getSscBrandTypeLiteral(declaration, name)
-+			if brand == nil {
-+				continue
-+			}
-+			symbolByBrand[brand.Symbol()] = symbol
-+			symbolByName[name] = symbol
-+		}
++		symbolByBrand[brand.Symbol()] = symbol
++		symbolByName[name] = symbol
 +	}
 +	c.ssc_PreludeSymbolByBrand = symbolByBrand
 +	c.ssc_PreludeSymbolByName = symbolByName
 +	c.ssc_Enabled = len(symbolByName) == len(ssc_types)
 +	return symbolByBrand, symbolByName
++}
++
++func (c *Checker) ssc_isPreludeDeclaration(declaration *ast.Node) bool {
++	sourceFile := ast.GetSourceFileOfNode(declaration)
++	if sourceFile == nil || sourceFile.FileName().BaseName() != "prelude.d.ts" {
++		return false
++	}
++	packageJsonDirectory := c.program.GetSourceFileMetaData(sourceFile.PathKey()).PackageJsonDirectory
++	if packageJsonDirectory == "" {
++		return false
++	}
++	packageJson := c.program.GetPackageJsonInfo(packageJsonDirectory.ResolveFile("package.json")).GetContents()
++	if packageJson == nil {
++		return false
++	}
++	packageName, ok := packageJson.Name.GetValue()
++	return ok && packageName == "syscript"
++}
++
++func (c *Checker) ssc_bstringType() *Type {
++	symbol := c.getGlobalSymbol("bstring", ast.SymbolFlagsInterface, nil)
++	if symbol == nil {
++		return nil
++	}
++	declaration := ast.GetDeclarationOfKind(symbol, ast.KindInterfaceDeclaration)
++	if declaration == nil || !c.ssc_isPreludeDeclaration(declaration) {
++		return nil
++	}
++	return c.getDeclaredTypeOfSymbol(symbol)
 +}
 +
 +func ssc_getSscBrandTypeLiteral(declaration *ast.Node, expectedName string) *ast.Node {
@@ -507,6 +529,18 @@ index 0000000000..ddd5bc30f1
 +	return result
 +}
 +
++func (c *Checker) ssc_ConcatResultTypeOrReportError(left *Type, right *Type, operator ast.Kind, errorNode *ast.Node) *Type {
++	bstringType := c.ssc_bstringType()
++	if bstringType == nil || left != bstringType && right != bstringType {
++		return nil
++	}
++	if left != right {
++		c.reportOperatorError(left, operator, right, errorNode, nil)
++		return c.errorType
++	}
++	return bstringType
++}
++
 +func (c *Checker) ssc_LogicalResultTypeOrReportError(left *Type, right *Type, operator ast.Kind, errorNode *ast.Node) *Type {
 +	if !c.ssc_IsEnabled() {
 +		return nil
@@ -526,10 +560,10 @@ index 0000000000..ddd5bc30f1
 +}
 diff --git a/tsc/internal/checker/ssc_test.go b/tsc/internal/checker/ssc_test.go
 new file mode 100644
-index 0000000000..282db563d2
+index 0000000000..ca51ba0f73
 --- /dev/null
 +++ b/tsc/internal/checker/ssc_test.go
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,410 @@
 +package checker_test
 +
 +import (
@@ -564,6 +598,7 @@ index 0000000000..282db563d2
 +  type f32 = number & { readonly [ssc]: 'f32' };
 +  type f64 = number & { readonly [ssc]: 'f64' };
 +  type char = number & { readonly [ssc]: 'char' };
++  interface bstring { readonly [ssc]: 'bstring' }
 +  interface Array<T> { length: u64; [n: number]: T }
 +  interface Boolean {}
 +  interface CallableFunction {}
@@ -685,6 +720,15 @@ index 0000000000..282db563d2
 +		{"same type union", "const r = (c ? a32 : b32) + a32;", "i32", nil},
 +		{"mixed union", "const r = (c ? a32 : a64) + a32;", "any", []int32{2365}},
 +		{"string concatenation", `const r = a32 + "s";`, "string", nil},
++		{"bstring concatenation", "declare const bs: bstring;\nconst r = bs + bs;", "bstring", nil},
++		{"bstring compound concatenation", "declare let bs: bstring;\nbs += bs;", "", nil},
++		{"bstring with string", "declare const bs: bstring;\nconst r = bs + items[0];", "any", []int32{2365}},
++		{"string with bstring", "declare const bs: bstring;\nconst r = items[0] + bs;", "any", []int32{2365}},
++		{"bstring with literal", `declare const bs: bstring;` + "\n" + `const r = bs + "s";`, "any", []int32{2365}},
++		{"bstring with number", "declare const bs: bstring;\nconst r = bs + a32;", "any", []int32{2365}},
++		{"bstring compound with string", "declare let bs: bstring;\nbs += items[0];", "", []int32{2365}},
++		{"string with string", "const r = items[0] + items[1];", "string", nil},
++		{"bstring template", "declare const bs: bstring;\nconst r = `${bs}`;", "string", nil},
 +		{"template literal", "const r = `${a64}`;", "string", nil},
 +		{"bigint operand", "const r = a32 + 1n;", "any", []int32{2365}},
 +		{"boolean operand", "const r = a32 + c;", "any", []int32{2365}},
