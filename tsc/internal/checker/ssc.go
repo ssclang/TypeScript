@@ -92,7 +92,7 @@ func ssc_getSscBrandTypeLiteral(declaration *ast.Node, expectedName string) *ast
 
 func (c *Checker) ssc_type(t *Type) *Type {
 	symbolByBrand, _ := c.ssc_loadPrelude()
-	if t.flags&(TypeFlagsNumber|TypeFlagsNumberLiteral) != 0 {
+	if t.flags&TypeFlagsNumberLike != 0 {
 		return c.numberType
 	}
 	if t.flags&TypeFlagsIntersection == 0 {
@@ -102,6 +102,9 @@ func (c *Checker) ssc_type(t *Type) *Type {
 		if symbol := symbolByBrand[memberType.symbol]; symbol != nil {
 			return c.getDeclaredTypeOfSymbol(symbol)
 		}
+	}
+	if slices.ContainsFunc(t.Types(), func(memberType *Type) bool { return memberType.flags&TypeFlagsNumberLike != 0 }) {
+		return c.numberType
 	}
 	return nil
 }
@@ -117,6 +120,24 @@ func (c *Checker) ssc_name(t *Type) string {
 		}
 	}
 	panic("not a syscript number type: " + c.TypeToString(t))
+}
+
+func (c *Checker) ssc_IsBrandToNumber(source *Type, target *Type) bool {
+	if !c.ssc_IsEnabled() {
+		return false
+	}
+	if sscType := c.ssc_type(source); sscType == nil || sscType == c.numberType {
+		return false
+	}
+	return c.ssc_type(target) == c.numberType
+}
+
+func (c *Checker) ssc_IsNumberLikeCheck(source *Type, target *Type) bool {
+	if target != c.numberType && target != c.numberOrBigIntType || !c.ssc_IsEnabled() {
+		return false
+	}
+	isSsc, _ := c.ssc_CommonType(source)
+	return isSsc
 }
 
 func (c *Checker) ssc_IsEnabled() bool {

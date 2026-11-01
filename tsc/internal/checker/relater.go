@@ -147,6 +147,9 @@ func (c *Checker) compareTypesSubtypeOf(source *Type, target *Type) Ternary {
 }
 
 func (c *Checker) isTypeAssignableTo(source *Type, target *Type) bool {
+	if c.ssc_IsNumberLikeCheck(source, target) { // syscript
+		return true
+	}
 	return c.isTypeRelatedTo(source, target, c.assignableRelation)
 }
 
@@ -2664,6 +2667,12 @@ func (r *Relater) isRelatedToEx(originalSource *Type, originalTarget *Type, recu
 		}
 		r.traceUnionsOrIntersectionsTooLarge(source, target)
 		return r.recursiveTypeRelatedTo(source, target, false /*reportErrors*/, IntersectionStateNone, recursionFlags)
+	}
+	if intersectionState&IntersectionStateTarget == 0 && r.c.ssc_IsBrandToNumber(source, target) { // syscript
+		if reportErrors {
+			r.reportErrorResults(originalSource, originalTarget, source, target, headMessage)
+		}
+		return TernaryFalse
 	}
 	// We fastpath comparing a type parameter to exactly its constraint, as this is _super_ common,
 	// and otherwise, for type parameters in large unions, causes us to need to compare the union to itself,

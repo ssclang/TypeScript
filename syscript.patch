@@ -244,12 +244,39 @@ index 73de52e18d..732e2734e9 100644
  			resultType = c.getUnionTypeEx([]*Type{c.GetNonNullableType(c.removeDefinitelyFalsyTypes(leftType)), rightType}, UnionReductionSubtype, nil, nil)
  		}
  		if operator == ast.KindBarBarEqualsToken {
+diff --git a/tsc/internal/checker/relater.go b/tsc/internal/checker/relater.go
+index a9bc484fef..b65d4ff8b7 100644
+--- a/tsc/internal/checker/relater.go
++++ b/tsc/internal/checker/relater.go
+@@ -147,6 +147,9 @@ func (c *Checker) compareTypesSubtypeOf(source *Type, target *Type) Ternary {
+ }
+ 
+ func (c *Checker) isTypeAssignableTo(source *Type, target *Type) bool {
++	if c.ssc_IsNumberLikeCheck(source, target) { // syscript
++		return true
++	}
+ 	return c.isTypeRelatedTo(source, target, c.assignableRelation)
+ }
+ 
+@@ -2665,6 +2668,12 @@ func (r *Relater) isRelatedToEx(originalSource *Type, originalTarget *Type, recu
+ 		r.traceUnionsOrIntersectionsTooLarge(source, target)
+ 		return r.recursiveTypeRelatedTo(source, target, false /*reportErrors*/, IntersectionStateNone, recursionFlags)
+ 	}
++	if intersectionState&IntersectionStateTarget == 0 && r.c.ssc_IsBrandToNumber(source, target) { // syscript
++		if reportErrors {
++			r.reportErrorResults(originalSource, originalTarget, source, target, headMessage)
++		}
++		return TernaryFalse
++	}
+ 	// We fastpath comparing a type parameter to exactly its constraint, as this is _super_ common,
+ 	// and otherwise, for type parameters in large unions, causes us to need to compare the union to itself,
+ 	// as we break down the _target_ union first, _then_ get the source constraint - so for every
 diff --git a/tsc/internal/checker/ssc.go b/tsc/internal/checker/ssc.go
 new file mode 100644
-index 0000000000..778fe5dc70
+index 0000000000..ddd5bc30f1
 --- /dev/null
 +++ b/tsc/internal/checker/ssc.go
-@@ -0,0 +1,226 @@
+@@ -0,0 +1,247 @@
 +package checker
 +
 +import (
@@ -344,7 +371,7 @@ index 0000000000..778fe5dc70
 +
 +func (c *Checker) ssc_type(t *Type) *Type {
 +	symbolByBrand, _ := c.ssc_loadPrelude()
-+	if t.flags&(TypeFlagsNumber|TypeFlagsNumberLiteral) != 0 {
++	if t.flags&TypeFlagsNumberLike != 0 {
 +		return c.numberType
 +	}
 +	if t.flags&TypeFlagsIntersection == 0 {
@@ -354,6 +381,9 @@ index 0000000000..778fe5dc70
 +		if symbol := symbolByBrand[memberType.symbol]; symbol != nil {
 +			return c.getDeclaredTypeOfSymbol(symbol)
 +		}
++	}
++	if slices.ContainsFunc(t.Types(), func(memberType *Type) bool { return memberType.flags&TypeFlagsNumberLike != 0 }) {
++		return c.numberType
 +	}
 +	return nil
 +}
@@ -369,6 +399,24 @@ index 0000000000..778fe5dc70
 +		}
 +	}
 +	panic("not a syscript number type: " + c.TypeToString(t))
++}
++
++func (c *Checker) ssc_IsBrandToNumber(source *Type, target *Type) bool {
++	if !c.ssc_IsEnabled() {
++		return false
++	}
++	if sscType := c.ssc_type(source); sscType == nil || sscType == c.numberType {
++		return false
++	}
++	return c.ssc_type(target) == c.numberType
++}
++
++func (c *Checker) ssc_IsNumberLikeCheck(source *Type, target *Type) bool {
++	if target != c.numberType && target != c.numberOrBigIntType || !c.ssc_IsEnabled() {
++		return false
++	}
++	isSsc, _ := c.ssc_CommonType(source)
++	return isSsc
 +}
 +
 +func (c *Checker) ssc_IsEnabled() bool {
@@ -478,10 +526,10 @@ index 0000000000..778fe5dc70
 +}
 diff --git a/tsc/internal/checker/ssc_test.go b/tsc/internal/checker/ssc_test.go
 new file mode 100644
-index 0000000000..808239531f
+index 0000000000..282db563d2
 --- /dev/null
 +++ b/tsc/internal/checker/ssc_test.go
-@@ -0,0 +1,368 @@
+@@ -0,0 +1,400 @@
 +package checker_test
 +
 +import (
@@ -516,7 +564,7 @@ index 0000000000..808239531f
 +  type f32 = number & { readonly [ssc]: 'f32' };
 +  type f64 = number & { readonly [ssc]: 'f64' };
 +  type char = number & { readonly [ssc]: 'char' };
-+  interface Array<T> { length: u64; [n: number]: T; [n: i64]: T; [n: u64]: T }
++  interface Array<T> { length: u64; [n: number]: T }
 +  interface Boolean {}
 +  interface CallableFunction {}
 +  interface Function {}
@@ -642,6 +690,9 @@ index 0000000000..808239531f
 +		{"boolean operand", "const r = a32 + c;", "any", []int32{2365}},
 +		{"any operand", "const r = a32 + x;", "any", []int32{2365}},
 +		{"numeric enum", "const r = a32 * e;", "any", []int32{2365}},
++		{"number intersection with number", "declare const w: number & {};\nconst r = w + n;", "number", nil},
++		{"computed enum with number", "enum F { A = abs(1) }\ndeclare const f: F;\nconst r = f + n;", "number", nil},
++		{"computed enum with ssc", "enum F { A = abs(1) }\ndeclare const f: F;\nconst r = f + a32;", "any", []int32{2365}},
 +		{"division", "const r = a32 / b32;", "i32", nil},
 +		{"remainder", "const r = a32 % b32;", "i32", nil},
 +		{"bitwise", "const r = a32 & b32;", "i32", nil},
@@ -705,14 +756,43 @@ index 0000000000..808239531f
 +		{"literal to f64", "const r: f64 = 1.5;", "f64", []int32{2322}},
 +		{"number assignment", "const r: i32 = n;", "i32", []int32{2322}},
 +		{"number to f64", "const r: f64 = n;", "f64", []int32{2322}},
-+		{"f64 to number", "const r: number = fa64;", "number", nil},
++		{"f64 to number", "const r: number = fa64;", "number", []int32{2322}},
 +		{"literal argument", "declare function take(v: i32): void;\ntake(1);", "", []int32{2345}},
 +		{"literal return", "function f(): i32 { return 0; }", "", []int32{2322}},
 +		{"literal array element", "const r: i32[] = [1];", "i32[]", []int32{2322}},
-+		{"literal as assertion", "const r = 1 as i32;", "i32", nil},
-+		{"number as assertion", "const r = n as i32;", "i32", nil},
-+		{"ssc to number", "const r: number = a32;", "number", nil},
++		{"literal as assertion", "const r = 1 as i32;", "i32", []int32{2352}},
++		{"number as assertion", "const r = n as i32;", "i32", []int32{2352}},
++		{"ssc as number assertion", "const r = a32 as number;", "number", []int32{2352}},
++		{"ssc as same ssc assertion", "const r = a32 as i32;", "i32", nil},
++		{"ssc equality with number", "const r = a32 === n;", "boolean", []int32{2367}},
++		{"number equality with ssc", "const r = n === a32;", "boolean", []int32{2367}},
++		{"ssc equality with literal", "const r = a32 === 1;", "boolean", []int32{2367}},
++		{"ssc union equality with literal", "declare const v: i32 | undefined;\nconst r = v === 1;", "boolean", []int32{2367}},
++		{"ssc equality with same ssc", "const r = a32 === b32;", "boolean", nil},
++		{"ssc switch case with literal", "switch (a32) { case 1: break; }", "", []int32{2678}},
++		{"ssc switch case with same ssc", "switch (a32) { case b32: break; }", "", nil},
++		{"ssc to enum", "const r: E = a32;", "E", []int32{2322}},
++		{"ssc to computed enum intersection", "enum F { A = abs(1) }\nconst r: F & {} = a32;", "", []int32{2322}},
++		{"ssc to computed enum", "enum F { A = abs(1) }\nconst r: F = a32;", "", []int32{2322}},
++		{"ssc equality with enum member", "const r = a32 === E.A;", "boolean", []int32{2367}},
++		{"ssc to number", "const r: number = a32;", "number", []int32{2322}},
++		{"ssc assignment to number", "let r: number = n;\nr = a32;", "", []int32{2322}},
++		{"ssc return as number", "function f(): number { return a32; }", "", []int32{2322}},
++		{"ssc argument as number", "declare function take(v: number): void;\ntake(a32);", "", []int32{2345}},
++		{"ssc array as number array", "declare const ints: i32[];\nconst r: number[] = ints;", "number[]", []int32{2322}},
++		{"ssc property as number", "const r: { x: number } = { x: a32 };", "", []int32{2322}},
++		{"ssc object as number object", "declare const p: { x: i32 };\nconst r: { x: number } = p;", "", []int32{2322}},
++		{"ssc to number union", "const r: number | undefined = a32;", "", []int32{2322}},
++		{"ssc union to number union", "declare const v: i32 | undefined;\nconst r: number | undefined = v;", "", []int32{2322}},
++		{"ssc generic constraint", "function g<T extends number>(v: T): T { return v; }\nconst r = g(a32);", "", []int32{2345}},
++		{"ssc to union with same type", "const r: i32 | number = a32;", "number | i32", nil},
++		{"number to number", "const r: number = n;", "number", nil},
++		{"ssc to same ssc intersection", "declare function twice(v: i32 & {}): void;\ntwice(a32);", "", nil},
++		{"ssc to number intersection", "const r: number & {} = a32;", "", []int32{2322}},
 +		{"constructor", "declare function i32(v: number): i32;\nconst r: i32 = i32(1);", "i32", nil},
++		{"constructor from ssc", "declare function i32(v: i64 | number | string): i32;\nconst r: i32 = i32(a64);", "i32", nil},
++		{"number constructor from ssc", "declare function num(v: i32 | number | string): number;\nconst r: number = num(a32);", "number", nil},
++		{"template with ssc", "const r = `${a64}`;", "string", nil},
 +		{"conditional keeps union", "const r = c ? a32 : a64;", "i32 | i64", nil},
 +		{"index with u64", "const r = items[ua64];", "string", nil},
 +		{"length", "const r = items.length;", "u64", nil},
